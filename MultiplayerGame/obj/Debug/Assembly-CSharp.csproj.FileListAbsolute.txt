@@ -1,0 +1,2 @@
+C:\Users\Thomas\Documents\GitHub\MultiplayerGame\MultiplayerGame\obj\Debug\Assembly-CSharp.csprojResolveAssemblyReference.cache
+C:\Users\Thomas\Documents\GitHub\MultiplayerGame\MultiplayerGame\obj\Debug\Assembly-CSharp.csproj.CoreCompileInputs.cache
