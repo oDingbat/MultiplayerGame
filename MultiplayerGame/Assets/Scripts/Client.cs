@@ -34,12 +34,14 @@ public class Client : MonoBehaviour {
 	private bool isStarted = false;
 	private byte error;
 
+	float startTime;
+	int msgTotal;
+
 	public GameObject playerPrefab;
 	
 	public Dictionary<int, Player> players = new Dictionary<int, Player>();
 
 	public void Connect () {
-		
 		string newName = GameObject.Find("NameInput").GetComponent<InputField>().text;
 		if (newName == "") {
 			Debug.Log("You must enter a name");
@@ -63,7 +65,18 @@ public class Client : MonoBehaviour {
 		isConnected = true;
 	}
 
-	private void Update() {
+	private void Start () {
+		StartCoroutine(TickUpdate());
+	}
+
+	IEnumerator TickUpdate() {
+		while (true) {
+			UpdateRecieve();
+			yield return new WaitForSeconds(1 / 64);
+		}
+	}
+
+	void UpdateRecieve() {
 		if (isConnected != false) {
 			int recHostId;
 			int connectionId;
@@ -73,14 +86,16 @@ public class Client : MonoBehaviour {
 			int dataSize;
 			byte error;
 
-			NetworkEventType recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
+			NetworkEventType recData = NetworkEventType.Nothing;
+			do {
+				recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
 
-			switch (recData) {
-				case NetworkEventType.DataEvent:
-					ParseData(connectionId, channelId, recBuffer, dataSize);
-
-					break;
-			}
+				switch (recData) {
+					case NetworkEventType.DataEvent:
+						ParseData(connectionId, channelId, recBuffer, dataSize);
+						break;
+				}
+			} while (recData != NetworkEventType.Nothing);
 		}
 	}
 
@@ -94,6 +109,7 @@ public class Client : MonoBehaviour {
 
 			case "AskName":
 				OnAskName(splitData);
+				startTime = Time.time;
 				break;
 
 			case "PlayerConnected":
@@ -106,6 +122,8 @@ public class Client : MonoBehaviour {
 
 			case "AskPosition":
 				OnAskPosition(splitData);
+				msgTotal++;
+				Debug.Log("Msg total: " + ((Time.time - startTime) / msgTotal));
 				break;
 		}
 	}
@@ -130,8 +148,10 @@ public class Client : MonoBehaviour {
 			for (int i = 1; i < data.Length; i++) {
 				string[] d = data[i].Split('%');
 				if (int.Parse(d[0]) != ourClientId) {      // Prevent server from updating us
-					Vector3 position = new Vector3(float.Parse(d[1]), float.Parse(d[2]), 0);
-					players[int.Parse(d[0])].playerController.desiredPosition = position;
+					if (players.ContainsKey(int.Parse(d[0])) == true) {			// Have we created this player yet?
+						Vector3 position = new Vector3(float.Parse(d[1]), float.Parse(d[2]), 0);
+						players[int.Parse(d[0])].playerController.desiredPosition = position;
+					}
 				}
 			}
 

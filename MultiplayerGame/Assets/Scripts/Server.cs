@@ -49,21 +49,13 @@ public class Server : MonoBehaviour {
 
 	IEnumerator TickUpdate () {
 		while (true) {
-			lastMovementUpdate = Time.time;
-			string m = "AskPosition|";
-			foreach (ServerClient sc in clients) {
-				if (sc.playerName != "") {
-					m += sc.connectionId.ToString() + "%" + sc.position.x.ToString() + "%" + sc.position.y.ToString() + "|";
-				}
-			}
-			m = m.Trim('|');
-			Send(m, unreliableChannel, clients);
-
-			yield return new WaitForSeconds(0.05f);
+			UpdateRecieve();
+			UpdateSend();
+			yield return new WaitForSeconds(1 / 64);
 		}
 	}
 
-	private void Update() {
+	private void UpdateRecieve () {
 		if (isStarted == true) {
 			int recHostId;
 			int connectionId;
@@ -72,23 +64,37 @@ public class Server : MonoBehaviour {
 			int bufferSize = 1024;
 			int dataSize;
 			byte error;
+			NetworkEventType recData = NetworkEventType.Nothing;
+			do {
+				recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
 
-			NetworkEventType recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
+				switch (recData) {
+					case NetworkEventType.ConnectEvent:
+						Debug.Log("Player " + connectionId + " has connected");
+						OnConnection(connectionId);
+						break;
+					case NetworkEventType.DataEvent:
+						ParseData(connectionId, channelId, recBuffer, dataSize);
+						break;
+					case NetworkEventType.DisconnectEvent:
+						Debug.Log("Player " + connectionId + " has disconnected");
+						OnDisconnection(connectionId);
+						break;
+				}
+			} while (recData != NetworkEventType.Nothing) ;
+		}
+	}
 
-			switch (recData) {
-				case NetworkEventType.ConnectEvent:
-					Debug.Log("Player " + connectionId + " has connected");
-					OnConnection(connectionId);
-					break;
-				case NetworkEventType.DataEvent:
-					ParseData(connectionId, channelId, recBuffer, dataSize);
-					break;
-				case NetworkEventType.DisconnectEvent:
-					Debug.Log("Player " + connectionId + " has disconnected");
-					OnDisconnection(connectionId);
-					break;
+	private void UpdateSend () {
+		lastMovementUpdate = Time.time;
+		string m = "AskPosition|";
+		foreach (ServerClient sc in clients) {
+			if (sc.playerName != "" && sc.playerName != "TEMP") {
+				m += sc.connectionId.ToString() + "%" + sc.position.x.ToString() + "%" + sc.position.y.ToString() + "|";
 			}
 		}
+		m = m.Trim('|');
+		Send(m, unreliableChannel, clients);
 	}
 
 	private void ParseData (int connectionId, int channelId, byte[] recBuffer, int dataSize) {
