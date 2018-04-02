@@ -18,6 +18,7 @@ public class Client : MonoBehaviour {
 	private int unreliableChannel;              // Channel for sending unreliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
+	private string versionNumber = "0.1.4";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -47,7 +48,7 @@ public class Client : MonoBehaviour {
 		if (isAttemptingConnection == false && isConnected == false) {     // Make sure we're not already connected and we're not already attempting to connect to server
 			Debug.Log("Attempting to connect to server...");
 			playerName = inputField_PlayerName.text;
-			ipAddressServer = "174.138.46.138";								// TODO: probably shouldn't hardcode this?
+			ipAddressServer = "127.0.0.1";								// TODO: probably shouldn't hardcode this?
 
 			NetworkTransport.Init();        // Initialize NetworkTransport
 			ConnectionConfig cc = new ConnectionConfig();
@@ -124,8 +125,8 @@ public class Client : MonoBehaviour {
 
 	private void ParseData(int connectionId, int channelId, byte[] recBuffer, int dataSize) {
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
-		//Debug.Log("Recieving : " + data);
-
+		Debug.Log("Recieving : " + data);
+		
 		string[] splitData = data.Split('|');
 
 		switch (splitData[0]) {
@@ -153,7 +154,7 @@ public class Client : MonoBehaviour {
 	}
 
 	// Connection/Disconnection Methods
-	private void SpawnPlayer(string playerName, int connectionId) {
+	private void SpawnPlayer(string playerName, int connectionId, string playerColor) {
 		Player newPlayer = new Player();
 		
 		newPlayer.playerName = playerName;
@@ -161,6 +162,9 @@ public class Client : MonoBehaviour {
 		newPlayer.playerGameObject = (GameObject)Instantiate(prefab_Player);
 		newPlayer.playerGameObject.GetComponentInChildren<TextMesh>().text = newPlayer.playerName;
 		newPlayer.playerController = newPlayer.playerGameObject.GetComponentInChildren<PlayerController>();
+		Color colorParse = Color.black;
+		ColorUtility.TryParseHtmlString("#" + playerColor, out colorParse);
+		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = colorParse;
 
 		if (connectionId == ourClientId) { // Is this playerGameObject ours?
 			newPlayer.playerController.playerType = PlayerController.PlayerType.Client;
@@ -187,7 +191,7 @@ public class Client : MonoBehaviour {
 
 	// Receive Methods
 	private void Receive_PlayerConnected (string[] splitData) {
-		SpawnPlayer(splitData[1], int.Parse(splitData[2]));
+		SpawnPlayer(splitData[1], int.Parse(splitData[2]), splitData[3]);
 	}
 
 	private void Receive_PlayerDisconnected(int cnnId) {
@@ -198,14 +202,15 @@ public class Client : MonoBehaviour {
 	private void Receive_AskName (string[] splitData) {
 		// Set this client's ID
 		ourClientId = int.Parse(splitData[1]);
-		
+
 		// Send our name to the server
-		Send("MyName|" + playerName, reliableChannel);
+		string newMessage = "MyName|" + playerName + "|" + versionNumber;
+		Send(newMessage, reliableChannel);
 
 		// Create all of the other players
 		for (int i = 2; i < splitData.Length - 1; i++) {
 			string[] d = splitData[i].Split('%');
-			SpawnPlayer(d[0], int.Parse(d[1]));
+			SpawnPlayer(d[0], int.Parse(d[1]), d[2]);
 		}
 	}
 

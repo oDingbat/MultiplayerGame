@@ -7,6 +7,7 @@ public class Player {
 	public string				playerName;
 	public GameObject			playerGameObject;
 	public PlayerController		playerController;
+	public string				playerColor;
 	public int					connectionId;
 
 	public Player () {

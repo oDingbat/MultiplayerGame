@@ -13,7 +13,8 @@ public class Server : MonoBehaviour {
 	private int reliableChannel;                // Channel for sending reliable information
 	private int unreliableChannel;              // Channel for sending unreliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
-	private float tickRate = 64;				// The rate at which information is recieved and sent to and from the clients
+	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
+	private string versionNumber = "0.1.4";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -103,7 +104,7 @@ public class Server : MonoBehaviour {
 		switch (splitData[0]) {
 
 			case "MyName":
-				Receive_MyName(connectionId, splitData[1]);
+				Receive_MyName(connectionId, splitData[1], splitData[2]);
 				break;
 
 			case "MyPosAndRot":
@@ -122,19 +123,25 @@ public class Server : MonoBehaviour {
 		Player newPlayer = new Player();
 		newPlayer.connectionId = connectionId;
 		newPlayer.playerName = "temp";
+		newPlayer.playerColor = ColorHub.GetRandomPlayerColor();
 		players.Add(newPlayer);
+
+		Debug.Log(newPlayer.playerColor);
 
 		// Spawn the player
 		newPlayer.playerGameObject = (GameObject)Instantiate(prefab_Player);
 		newPlayer.playerController = newPlayer.playerGameObject.GetComponent<PlayerController>();
-		newPlayer.playerController.playerType = PlayerController.PlayerType.Server;					// Set the playerType to Server as to use the server specific code
-
+		newPlayer.playerController.playerType = PlayerController.PlayerType.Server;                 // Set the playerType to Server as to use the server specific code
+		Color newColor = Color.black;
+		ColorUtility.TryParseHtmlString("#" + newPlayer.playerColor, out newColor);
+		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
 
 		// When player joins serer, tell them their Id
 		// Reqest player name, return name of other players in game
 		string msg = "AskName|" + connectionId + "|";
 		foreach (Player player in players) {
-			msg += player.playerName + "%" + player.connectionId + "|";
+
+			msg += player.playerName + "%" + player.connectionId + "%" + player.playerColor + "|";
 		}
 		msg = msg.Trim('|');
 
@@ -172,12 +179,17 @@ public class Server : MonoBehaviour {
 		players.Find(x => x.connectionId == connectionId).playerController.desiredRotation = rot;
 	}
 
-	private void Receive_MyName (int connectionId, string playerName) {
+	private void Receive_MyName (int connectionId, string playerName, string playersVersionNumber) {
 		// Link name to the connectionId
-		players.Find(x => x.connectionId == connectionId).playerName = playerName;
+		Player currentPlayer = players.Find(x => x.connectionId == connectionId);
+		currentPlayer.playerName = playerName;
 
-		// Tell everybody that a new player has connected
-		Send("PlayerConnected|" + playerName + "|" + connectionId, reliableChannel, players);
+		if (playersVersionNumber != versionNumber) {
+			NetworkTransport.Disconnect(hostId, connectionId, out error);   // Kick player
+		} else {
+			// Tell everybody that a new player has connected
+			Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerColor, reliableChannel, players);
+		}
 	}
 
 	private void Receive_FireProjectile(int connectionId, string[] splitData) {
@@ -199,7 +211,7 @@ public class Server : MonoBehaviour {
 	}
 	
 	private void Send (string message, int channelId, List<Player> listPlayers) {
-		//Debug.Log("Sending : " + message);
+		Debug.Log("Sending : " + message);
 		byte[] msg = Encoding.Unicode.GetBytes(message);        // Turn string message into byte array
 		foreach (Player player in listPlayers) {
 			NetworkTransport.Send(hostId, player.connectionId, channelId, msg, message.Length * sizeof(char), out error);
