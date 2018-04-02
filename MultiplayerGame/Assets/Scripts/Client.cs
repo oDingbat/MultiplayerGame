@@ -5,135 +5,202 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
 
-public class Player {
-	public string playerName;
-	public GameObject avatar;
-	public PlayerController playerController;
-	public int connectionId;
-}
-
-
 public class Client : MonoBehaviour {
 
-	private const int MAX_CONNECTION = 100;
+	// Server Information
+	private const int MAX_CONNECTION = 100;     // The max number of players allowed on the server
+	public string ipAddressServer = "";
+	private int port = 3333;                    // The port number
+	private int ourClientId;                    // The Id of our client (Used to manipulate the Players but avoid manipulating our own player incorrectly) (Not same as connectionId)
+	private int hostId;                         // The Id of our host
+	private int connectionId;                   // The Id of our connection
+	private int reliableChannel;                // Channel for sending reliable information
+	private int unreliableChannel;              // Channel for sending unreliable information
+	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
+	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
 
-	private int port = 5701;
+	// Connection booleans
+	private bool isConnected = false;           // Are we currently connected to the Server?
+	private bool isAttemptingConnection;		// Are we currently attempting to connect to the server?
+	private bool isLoaded = false;              // Is the server fully loaded and ready to be played?
 
-	public string playerName;
-	private int hostId;
-	private int webHostId;
+	[Space(10)] [Header("Player Variables")]
+	public string playerName;                   // The name of our player
 
-	private int reliableChannel;
-	private int unreliableChannel;
+	[Space(10)] [Header("UI")]
+	public InputField inputField_PlayerName;    // Input field for typing the player's desired name
+	public InputField inputField_IPAddress;		// input field for the desired ip address to connect to
+	public InputField inputField_Chat;          // Input field for typing in the chat
+	public RectTransform ui_LoginScreen;        // RT for login screen
+	public Text text_Chat;                      // Text field for displaying game chat
 
-	private int ourClientId;
-	private int connectionId;
-	private float connectionTime;
+	[Space(10)] [Header("Prefabs")]
+	public GameObject prefab_Player;            // The prefab for player GameObjects
+	public GameObject prefab_Projectile;		// The prefab for regular projectiles
 
-	private bool isConnected = false;
-	private bool isStarted = false;
-	private byte error;
+	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // A dictionary of Players where the int key is that player's clientId
 
-	float startTime;
-	int msgTotal;
 
-	public GameObject playerPrefab;
-	
-	public Dictionary<int, Player> players = new Dictionary<int, Player>();
 
-	public void Connect () {
-		string newName = GameObject.Find("NameInput").GetComponent<InputField>().text;
-		if (newName == "") {
-			Debug.Log("You must enter a name");
-			return;
+	public void Connect() {
+		// This method connects the client to the server
+		if (isAttemptingConnection == false && isConnected == false) {     // Make sure we're not already connected and we're not already attempting to connect to server
+			Debug.Log("Attempting to connect to server...");
+			playerName = inputField_PlayerName.text;
+			ipAddressServer = "174.138.46.138";								// TODO: probably shouldn't hardcode this?
+
+			NetworkTransport.Init();        // Initialize NetworkTransport
+			ConnectionConfig cc = new ConnectionConfig();
+			reliableChannel = cc.AddChannel(QosType.Reliable);          // Adds the reliable channel
+			unreliableChannel = cc.AddChannel(QosType.Unreliable);      // Adds the unreliable channel
+			HostTopology topo = new HostTopology(cc, MAX_CONNECTION);       // Setup topology
+			hostId = NetworkTransport.AddHost(topo, 0);                                         // Gets the Id for the host
+
+			Debug.Log("Connecting with Ip: " + ipAddressServer + " port: " + port);
+
+			connectionId = NetworkTransport.Connect(hostId, ipAddressServer, port, 0, out error);   // Gets the Id for the connection (not the same as ourClientId)
+
+			Debug.Log(connectionId);
+
+			isAttemptingConnection = true;
 		}
-
-		playerName = newName;
-
-		NetworkTransport.Init();
-		ConnectionConfig cc = new ConnectionConfig();
-
-		reliableChannel = cc.AddChannel(QosType.Reliable);
-		unreliableChannel = cc.AddChannel(QosType.Unreliable);
-
-		HostTopology topo = new HostTopology(cc, MAX_CONNECTION);
-
-		hostId = NetworkTransport.AddHost(topo, 0);
-		connectionId = NetworkTransport.Connect(hostId, "127.0.0.1", port, 0, out error);
-
-		connectionTime = Time.time;		
-		isConnected = true;
 	}
 
-	private void Start () {
+	private void Start() {
+		//Connect();
 		StartCoroutine(TickUpdate());
 	}
 
-	IEnumerator TickUpdate() {
+	// Update Methods
+	private IEnumerator TickUpdate() {
+		// This method is used to receive and send information back and forth between the connected server. It's tick rate depends on the variable tickRate
 		while (true) {
-			UpdateRecieve();
-			yield return new WaitForSeconds(1 / 64);
+			if (isAttemptingConnection || isConnected) {
+				UpdateReceive();
+			}
+			if (isConnected) {      // Make sure we're connected first
+				UpdateSend();
+			}
+			yield return new WaitForSeconds(1 / tickRate);
 		}
 	}
 
-	void UpdateRecieve() {
-		if (isConnected != false) {
-			int recHostId;
-			int connectionId;
-			int channelId;
-			byte[] recBuffer = new byte[1024];
-			int bufferSize = 1024;
-			int dataSize;
-			byte error;
-
-			NetworkEventType recData = NetworkEventType.Nothing;
-			do {
-				recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
-
-				switch (recData) {
-					case NetworkEventType.DataEvent:
-						ParseData(connectionId, channelId, recBuffer, dataSize);
-						break;
-				}
-			} while (recData != NetworkEventType.Nothing);
+	private void UpdateSend() {
+		if (isLoaded) {         // Is the server fully loaded?
+			Send_PosAndRot();
 		}
 	}
 
-	private void ParseData (int connectionId, int channelId, byte[] recBuffer, int dataSize) {
+	private void UpdateReceive() {
+		// This method handles receiving information from the server
+		int recHostId;
+		int connectionId;
+		int channelId;
+		byte[] recBuffer = new byte[1024];
+		int bufferSize = 1024;
+		int dataSize;
+		byte error;
+		NetworkEventType recData = NetworkEventType.Nothing;
+		do {        // Do While ensures that we process all of the sent messages each tick
+			recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
+			//Debug.Log(recData);
+
+			switch (recData) {
+				case NetworkEventType.ConnectEvent:
+					Debug.Log("Successfully connected to server!");
+					isConnected = true;
+					break;
+				case NetworkEventType.DataEvent:
+					ParseData(connectionId, channelId, recBuffer, dataSize);
+					break;
+				case NetworkEventType.DisconnectEvent:
+					Debug.Log("Disconnected");
+					isConnected = false;
+					isAttemptingConnection = false;
+					break;
+			}
+		} while (recData != NetworkEventType.Nothing);
+	}
+
+	private void ParseData(int connectionId, int channelId, byte[] recBuffer, int dataSize) {
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
-		Debug.Log("Recieving : " + data);
+		//Debug.Log("Recieving : " + data);
 
 		string[] splitData = data.Split('|');
 
 		switch (splitData[0]) {
 
 			case "AskName":
-				OnAskName(splitData);
-				startTime = Time.time;
+				Receive_AskName(splitData);
 				break;
 
 			case "PlayerConnected":
-				SpawnPlayer(splitData[1], int.Parse(splitData[2]));
+				Receive_PlayerConnected(splitData);
 				break;
 
 			case "PlayerDisconnected":
-				PlayerDisconnected(int.Parse(splitData[1]));
+				Receive_PlayerDisconnected(int.Parse(splitData[1]));
 				break;
 
-			case "AskPosition":
-				OnAskPosition(splitData);
-				msgTotal++;
-				Debug.Log("Msg total: " + ((Time.time - startTime) / msgTotal));
+			case "PlayerPositions":
+				Receive_PlayerPositions(splitData);
+				break;
+
+			case "CreateProjectile":
+				Receive_CreateProjectile(splitData);
 				break;
 		}
 	}
 
-	private void OnAskName (string[] splitData) {
+	// Connection/Disconnection Methods
+	private void SpawnPlayer(string playerName, int connectionId) {
+		Player newPlayer = new Player();
+		
+		newPlayer.playerName = playerName;
+		newPlayer.connectionId = connectionId;
+		newPlayer.playerGameObject = (GameObject)Instantiate(prefab_Player);
+		newPlayer.playerGameObject.GetComponentInChildren<TextMesh>().text = newPlayer.playerName;
+		newPlayer.playerController = newPlayer.playerGameObject.GetComponentInChildren<PlayerController>();
+
+		if (connectionId == ourClientId) { // Is this playerGameObject ours?
+			newPlayer.playerController.playerType = PlayerController.PlayerType.Client;
+			ui_LoginScreen.gameObject.SetActive(false);
+			isLoaded = true;
+		}
+
+		players.Add(connectionId, newPlayer);
+	}
+
+	// Send Methods
+	private void Send_PosAndRot() {
+		// Send our position to the server
+		Vector2 myPosition = players[ourClientId].playerGameObject.transform.position;
+		float myRotation = players[ourClientId].playerController.playerSprite.eulerAngles.z;
+		string m = "MyPosAndRot|" + myPosition.x.ToString() + "|" + myPosition.y.ToString() + "|" + myRotation.ToString();
+		Send(m, unreliableChannel);
+	}
+
+	public void Send_Projectile (Vector2 origin, Vector2 velocity) {
+		string newMessage = "FireProjectile|" + origin.x.ToString() + "|" + origin.y.ToString() + "|" + velocity.x.ToString() + "|" + velocity.y.ToString();
+		Send(newMessage, reliableChannel);
+	}
+
+	// Receive Methods
+	private void Receive_PlayerConnected (string[] splitData) {
+		SpawnPlayer(splitData[1], int.Parse(splitData[2]));
+	}
+
+	private void Receive_PlayerDisconnected(int cnnId) {
+		Destroy(players[cnnId].playerGameObject);
+		players.Remove(cnnId);
+	}
+
+	private void Receive_AskName (string[] splitData) {
 		// Set this client's ID
 		ourClientId = int.Parse(splitData[1]);
 		
 		// Send our name to the server
-		Send("NameIs|" + playerName, reliableChannel);
+		Send("MyName|" + playerName, reliableChannel);
 
 		// Create all of the other players
 		for (int i = 2; i < splitData.Length - 1; i++) {
@@ -142,50 +209,28 @@ public class Client : MonoBehaviour {
 		}
 	}
 
-	private void OnAskPosition(string[] data) {
-		if (isStarted == true) {
-			// Update everyone else
-			for (int i = 1; i < data.Length; i++) {
-				string[] d = data[i].Split('%');
-				if (int.Parse(d[0]) != ourClientId) {      // Prevent server from updating us
-					if (players.ContainsKey(int.Parse(d[0])) == true) {			// Have we created this player yet?
-						Vector3 position = new Vector3(float.Parse(d[1]), float.Parse(d[2]), 0);
-						players[int.Parse(d[0])].playerController.desiredPosition = position;
-					}
+	private void Receive_PlayerPositions (string[] splitData) {
+		for (int i = 1; i < splitData.Length; i++) {
+			string[] splitDataBits = splitData[i].Split('%');
+			if (players.ContainsKey(int.Parse(splitDataBits[0]))) {     // Does a player with this connectionId exist?
+				if (int.Parse(splitDataBits[0]) != ourClientId) {
+					players[int.Parse(splitDataBits[0])].playerController.desiredPosition = new Vector3(float.Parse(splitDataBits[1]), float.Parse(splitDataBits[2]), 0);
+					players[int.Parse(splitDataBits[0])].playerController.desiredRotation = float.Parse(splitDataBits[3]);
 				}
 			}
-
-			// Send our own position
-			Vector3 myPosition = players[ourClientId].avatar.transform.position;
-			string m = "MyPosition|" + myPosition.x.ToString() + "|" + myPosition.y.ToString();
-			Send(m, unreliableChannel);
 		}
 	}
 
-	private void SpawnPlayer (string playerName, int cnnId) {
-		GameObject newPlayerGameObject = (GameObject)Instantiate(playerPrefab);
+	private void Receive_CreateProjectile (string[] splitData) {
+		Vector2 origin = new Vector2(float.Parse(splitData[1]), float.Parse(splitData[2]));
+		Vector2 velocity = new Vector2(float.Parse(splitData[3]), float.Parse(splitData[4]));
 
-		Player p = new Player();
-		p.avatar = newPlayerGameObject;
-		p.playerController = p.avatar.GetComponentInChildren<PlayerController>();
-		p.playerName = playerName;
-		p.connectionId = cnnId;
-		p.avatar.GetComponentInChildren<TextMesh>().text = p.playerName;
-
-		if (cnnId == ourClientId) { // Is this playerGameObject ours?
-			p.playerController.isClient = true;
-			GameObject.Find("Canvas").SetActive(false);
-			isStarted = true;
-		}
-
-		players.Add(cnnId, p);
+		GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
+		Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
+		newProjectileClass.velocity = velocity;
 	}
 
-	private void PlayerDisconnected (int cnnId) {
-		Destroy(players[cnnId].avatar);
-		players.Remove(cnnId);
-	}
-
+	// Send Method
 	private void Send(string message, int channelId) {
 		byte[] msg = Encoding.Unicode.GetBytes(message);        // Turn string message into byte array
 		NetworkTransport.Send(hostId, connectionId, channelId, msg, message.Length * sizeof(char), out error);
