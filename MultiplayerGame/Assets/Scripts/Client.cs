@@ -18,7 +18,7 @@ public class Client : MonoBehaviour {
 	private int unreliableChannel;              // Channel for sending unreliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.4";     // The version number currently used by the server
+	private string versionNumber = "0.1.5";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -34,6 +34,7 @@ public class Client : MonoBehaviour {
 	public InputField inputField_Chat;          // Input field for typing in the chat
 	public RectTransform ui_LoginScreen;        // RT for login screen
 	public Text text_Chat;                      // Text field for displaying game chat
+	public Text text_Error;						// Text field for displaying errors while trying to connect to a server
 
 	[Space(10)] [Header("Prefabs")]
 	public GameObject prefab_Player;            // The prefab for player GameObjects
@@ -48,7 +49,7 @@ public class Client : MonoBehaviour {
 		if (isAttemptingConnection == false && isConnected == false) {     // Make sure we're not already connected and we're not already attempting to connect to server
 			Debug.Log("Attempting to connect to server...");
 			playerName = inputField_PlayerName.text;
-			ipAddressServer = "127.0.0.1";								// TODO: probably shouldn't hardcode this?
+			ipAddressServer = "174.138.46.138";								// TODO: probably shouldn't hardcode this?
 
 			NetworkTransport.Init();        // Initialize NetworkTransport
 			ConnectionConfig cc = new ConnectionConfig();
@@ -125,31 +126,45 @@ public class Client : MonoBehaviour {
 
 	private void ParseData(int connectionId, int channelId, byte[] recBuffer, int dataSize) {
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
-		Debug.Log("Recieving : " + data);
+		//Debug.Log("Recieving : " + data);
 		
 		string[] splitData = data.Split('|');
 
-		switch (splitData[0]) {
+		if (splitData.Length > 0) {		// Check to make sure the split data even has any information
+			switch (splitData[0]) {
 
-			case "AskName":
-				Receive_AskName(splitData);
-				break;
+				case "AskInfo":
+					Receive_AskInfo(splitData);
+					break;
 
-			case "PlayerConnected":
-				Receive_PlayerConnected(splitData);
-				break;
+				case "WrongVersion":
+					Receive_WrongVersion();
+					break;
 
-			case "PlayerDisconnected":
-				Receive_PlayerDisconnected(int.Parse(splitData[1]));
-				break;
+				case "PlayerConnected":
+					Receive_PlayerConnected(splitData);
+					break;
 
-			case "PlayerPositions":
-				Receive_PlayerPositions(splitData);
-				break;
+				case "PlayerDied":
+					Receive_PlayerDied(splitData);
+					break;
 
-			case "CreateProjectile":
-				Receive_CreateProjectile(splitData);
-				break;
+				case "PlayerRespawned":
+					Receive_PlayerRespawned(splitData);
+					break;
+
+				case "PlayerDisconnected":
+					Receive_PlayerDisconnected(int.Parse(splitData[1]));
+					break;
+
+				case "PlayerPositions":
+					Receive_PlayerPositions(splitData);
+					break;
+
+				case "CreateProjectile":
+					Receive_CreateProjectile(splitData);
+					break;
+			}
 		}
 	}
 
@@ -168,8 +183,10 @@ public class Client : MonoBehaviour {
 
 		if (connectionId == ourClientId) { // Is this playerGameObject ours?
 			newPlayer.playerController.playerType = PlayerController.PlayerType.Client;
+			newPlayer.playerGameObject.layer = LayerMask.NameToLayer("ClientPlayer");
 			ui_LoginScreen.gameObject.SetActive(false);
 			isLoaded = true;
+			// Currently this is the point at which the client's player becomes active and the GUI closes, we should probably change that! D:
 		}
 
 		players.Add(connectionId, newPlayer);
@@ -194,17 +211,38 @@ public class Client : MonoBehaviour {
 		SpawnPlayer(splitData[1], int.Parse(splitData[2]), splitData[3]);
 	}
 
+	private void Receive_WrongVersion () {
+		Debug.Log("Server says we have the wrong version number.");
+		text_Error.text = "Error: outdated version number (v"+ versionNumber + ")";
+	}
+
+	private void Receive_PlayerDied (string[] splitData) {
+		int deadPlayerConnectionId = int.Parse(splitData[1]);
+		Debug.Log("Player Died");
+		//if (deadPlayerConnectionId == ourClientId) {
+		players[deadPlayerConnectionId].playerController.Die();
+		//}
+	}
+
+	private void Receive_PlayerRespawned(string[] splitData) {
+		int deadPlayerConnectionId = int.Parse(splitData[1]);
+		Debug.Log("Player Respawned");
+		//if (deadPlayerConnectionId == ourClientId) {
+		players[deadPlayerConnectionId].playerController.Respawn();
+		//}
+	}
+
 	private void Receive_PlayerDisconnected(int cnnId) {
 		Destroy(players[cnnId].playerGameObject);
 		players.Remove(cnnId);
 	}
 
-	private void Receive_AskName (string[] splitData) {
+	private void Receive_AskInfo (string[] splitData) {
 		// Set this client's ID
 		ourClientId = int.Parse(splitData[1]);
 
-		// Send our name to the server
-		string newMessage = "MyName|" + playerName + "|" + versionNumber;
+		// Send our name and version number to the server
+		string newMessage = "MyInfo|" + playerName + "|" + versionNumber;
 		Send(newMessage, reliableChannel);
 
 		// Create all of the other players
@@ -227,12 +265,13 @@ public class Client : MonoBehaviour {
 	}
 
 	private void Receive_CreateProjectile (string[] splitData) {
-		Vector2 origin = new Vector2(float.Parse(splitData[1]), float.Parse(splitData[2]));
-		Vector2 velocity = new Vector2(float.Parse(splitData[3]), float.Parse(splitData[4]));
+		Vector2 origin = new Vector2(float.Parse(splitData[2]), float.Parse(splitData[3]));
+		Vector2 velocity = new Vector2(float.Parse(splitData[4]), float.Parse(splitData[5]));
 
 		GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
 		Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
 		newProjectileClass.velocity = velocity;
+		newProjectileClass.parentEntity = players[int.Parse(splitData[1])].playerController as Entity;
 	}
 
 	// Send Method

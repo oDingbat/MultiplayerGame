@@ -14,7 +14,7 @@ public class Server : MonoBehaviour {
 	private int unreliableChannel;              // Channel for sending unreliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.4";		// The version number currently used by the server
+	private string versionNumber = "0.1.5";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -22,8 +22,8 @@ public class Server : MonoBehaviour {
 	// All clients
 	public List<Player> players = new List<Player>();			// List of players
 
+	// Prefabs
 	public GameObject prefab_Player;
-
 	public GameObject prefab_Projectile;
 
 	private void InitializeServer() {
@@ -50,8 +50,7 @@ public class Server : MonoBehaviour {
 		InitializeServer();
 		StartCoroutine(TickUpdate());
 	}
-
-
+	
 		// Update Methods
 	IEnumerator TickUpdate () {
 		while (true) {
@@ -97,23 +96,25 @@ public class Server : MonoBehaviour {
 
 	private void ParseData (int connectionId, int channelId, byte[] recBuffer, int dataSize) {
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
-		Debug.Log("Recieving from " + connectionId + " : " + data);
+		//Debug.Log("Recieving from " + connectionId + " : " + data);
 
 		string[] splitData = data.Split('|');
 
-		switch (splitData[0]) {
+		if (splitData.Length > 0) {
+			switch (splitData[0]) {
 
-			case "MyName":
-				Receive_MyName(connectionId, splitData[1], splitData[2]);
-				break;
+				case "MyInfo":
+					Receive_MyInfo(connectionId, splitData[1], splitData[2]);
+					break;
 
-			case "MyPosAndRot":
-				Receive_MyPosAndRot(connectionId, float.Parse(splitData[1]), float.Parse(splitData[2]), float.Parse(splitData[3]));
-				break;
+				case "MyPosAndRot":
+					Receive_MyPosAndRot(connectionId, float.Parse(splitData[1]), float.Parse(splitData[2]), float.Parse(splitData[3]));
+					break;
 
-			case "FireProjectile":
-				Receive_FireProjectile(connectionId, splitData);
-				break;
+				case "FireProjectile":
+					Receive_FireProjectile(connectionId, splitData);
+					break;
+			}
 		}
 	}
 
@@ -137,10 +138,9 @@ public class Server : MonoBehaviour {
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
 
 		// When player joins serer, tell them their Id
-		// Reqest player name, return name of other players in game
-		string msg = "AskName|" + connectionId + "|";
+		// Reqest player's info
+		string msg = "AskInfo|" + connectionId + "|";
 		foreach (Player player in players) {
-
 			msg += player.playerName + "%" + player.connectionId + "%" + player.playerColor + "|";
 		}
 		msg = msg.Trim('|');
@@ -172,35 +172,60 @@ public class Server : MonoBehaviour {
 		Send(message, unreliableChannel, players);
 	}
 
+	public IEnumerator Send_PlayerDied(PlayerController _playerController) {
+		int deadPlayerId = players.Find(x => x.playerController == _playerController).connectionId;
+
+		// Tell everyone a player died
+		string message1 = "PlayerDied|" + deadPlayerId;
+		Send(message1, reliableChannel, players);
+
+		yield return new WaitForSeconds(3);
+
+		// Tell everyone a player respawned
+		string message2 = "PlayerRespawned|" + deadPlayerId;
+		Debug.Log("Sending Respawn");
+		_playerController.Respawn();
+		Send(message2, reliableChannel, players);
+	}
+
 		// Receive Methods
 	private void Receive_MyPosAndRot(int connectionId, float posX, float posY, float rot) {
 		players.Find(x => x.connectionId == connectionId).playerController.desiredPosition = new Vector3(posX, posY, 0);
-		Debug.Log(rot);
 		players.Find(x => x.connectionId == connectionId).playerController.desiredRotation = rot;
 	}
 
-	private void Receive_MyName (int connectionId, string playerName, string playersVersionNumber) {
+	private void Receive_MyInfo (int connectionId, string playerName, string playersVersionNumber) {
 		// Link name to the connectionId
 		Player currentPlayer = players.Find(x => x.connectionId == connectionId);
 		currentPlayer.playerName = playerName;
 
 		if (playersVersionNumber != versionNumber) {
-			NetworkTransport.Disconnect(hostId, connectionId, out error);   // Kick player
+			StartCoroutine(Send_WrongVersion(connectionId));
 		} else {
 			// Tell everybody that a new player has connected
 			Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerColor, reliableChannel, players);
 		}
 	}
 
+	private IEnumerator Send_WrongVersion (int connectionId) {
+		Send("WrongVersion", reliableChannel, connectionId);
+		yield return new WaitForSeconds(0.5f);
+		NetworkTransport.Disconnect(hostId, connectionId, out error);   // Kick player
+	}
+
 	private void Receive_FireProjectile(int connectionId, string[] splitData) {
+		Player parentPlayer = players.Find(x => x.connectionId == connectionId);
+
 		Vector2 origin = new Vector2(float.Parse(splitData[1]), float.Parse(splitData[2]));
 		Vector2 velocity = new Vector2(float.Parse(splitData[3]), float.Parse(splitData[4]));
 
 		GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
 		Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
 		newProjectileClass.velocity = velocity;
+		newProjectileClass.parentEntity = parentPlayer.playerController as Entity;
+		newProjectileClass.isServerSide = true;
 
-		Send("CreateProjectile|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y, reliableChannel, players);
+		Send("CreateProjectile|" + parentPlayer.connectionId + "|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y, reliableChannel, players);
 	}
 
 	// Both Send Methods
@@ -211,7 +236,6 @@ public class Server : MonoBehaviour {
 	}
 	
 	private void Send (string message, int channelId, List<Player> listPlayers) {
-		Debug.Log("Sending : " + message);
 		byte[] msg = Encoding.Unicode.GetBytes(message);        // Turn string message into byte array
 		foreach (Player player in listPlayers) {
 			NetworkTransport.Send(hostId, player.connectionId, channelId, msg, message.Length * sizeof(char), out error);

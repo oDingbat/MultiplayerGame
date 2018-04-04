@@ -5,6 +5,7 @@ using UnityEngine;
 public class PlayerController : Entity {
 
 	public Client client;
+	public Server server;
 
 	public Vector3 inputMovement;
 	public Vector2 inputMouse;
@@ -34,7 +35,16 @@ public class PlayerController : Entity {
 	public GameObject prefab_Projectile;
 
 	void Start() {
-		client = GameObject.Find("[Client]").GetComponent<Client>();
+		if (GameObject.Find("[Client]")) {
+			client = GameObject.Find("[Client]").GetComponent<Client>();
+		}
+
+		if (GameObject.Find("[Server]")) {
+			server = GameObject.Find("[Server]").GetComponent<Server>();
+		}
+
+		eventDie += OnDie;
+		eventRespawn += OnRespawn;
 
 		if (playerType == PlayerType.Client) {
 			cam = GameObject.Find("[Cameras]").transform.Find("Camera Main").GetComponent<Camera>();
@@ -44,16 +54,18 @@ public class PlayerController : Entity {
 	}
 
 	void Update () {
-		switch (playerType) {
-			case (PlayerType.Client): {
-					UpdateMovement_Client();
-				} break;
-			case (PlayerType.Peer): {
+		if (isDead == false) {
+			switch (playerType) {
+				case (PlayerType.Client): {
+						UpdateMovement_Client();
+					} break;
+				case (PlayerType.Peer): {
 					UpdateMovement_Peer();
-				} break;
-			case (PlayerType.Server): {
-					UpdateMovement_Server();
-				} break;
+					} break;
+				case (PlayerType.Server): {
+						UpdateMovement_Server();
+					} break;
+			}
 		}
 
 		UpdateAll();
@@ -122,6 +134,20 @@ public class PlayerController : Entity {
 
 	void UpdateAll () {
 
+	}
+
+	void OnDie () {
+		playerSprite.gameObject.SetActive(false);
+		if (server != null) {
+			Debug.Log("Sending Death");
+			StartCoroutine(server.Send_PlayerDied(this));
+		}
+	}
+	
+	void OnRespawn () {
+		playerSprite.gameObject.SetActive(true);
+		isDead = false;
+		healthCurrent = healthMax;
 	}
 
 }

@@ -18,6 +18,10 @@ public class Projectile : MonoBehaviour {
 	public SpriteRenderer spriteRenderer;
 	int deleceratedTurnDirection;
 
+	public bool isServerSide = false;
+
+	public Entity parentEntity;			// The entity this projectile came from
+
 	void Update() {
 		UpdateMovement();
 	}
@@ -28,15 +32,20 @@ public class Projectile : MonoBehaviour {
 
 			if (hit) {
 				transform.position = hit.point;
-				isStuck = true;
+				
 				if (hit.transform.GetComponent<Entity>() != null) {
 					Entity hitEntity = hit.transform.GetComponent<Entity>();
-					hitEntity.TakeDamage(1);
-					if (hitEntity is Node) {
-						transform.parent = hitEntity.transform;
+					if (parentEntity == null || parentEntity != hitEntity) {        // Make sure players don't damage themselves
+						if (isServerSide == true) {
+							hitEntity.TakeDamage(1);
+						}
+						if (hitEntity is Node) {
+							transform.parent = hitEntity.transform;
+							isStuck = true;
+						}
+						StartCoroutine(BreakProjectile());
 					}
 				}
-				StartCoroutine(BreakProjectile());
 			}
 
 			if (velocity.magnitude < 1) {

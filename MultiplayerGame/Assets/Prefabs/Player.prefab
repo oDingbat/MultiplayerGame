@@ -21,7 +21,7 @@ GameObject:
   - component: {fileID: 4832953768532078}
   - component: {fileID: 212730351310668482}
   - component: {fileID: 114403464238849908}
-  m_Layer: 9
+  m_Layer: 8
   m_Name: Sprite
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -38,7 +38,7 @@ GameObject:
   - component: {fileID: 4012274022185180}
   - component: {fileID: 114601294334775630}
   - component: {fileID: 58138675903269850}
-  m_Layer: 9
+  m_Layer: 8
   m_Name: Player
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -55,7 +55,7 @@ GameObject:
   - component: {fileID: 4048362037756638}
   - component: {fileID: 23432594542448448}
   - component: {fileID: 102223861655781066}
-  m_Layer: 9
+  m_Layer: 8
   m_Name: NameTag
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -196,9 +196,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2d90e9a5042264b4f8a2cf04a08e85c1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  healthCurrent: 10
-  healthMax: 0
+  healthCurrent: 1
+  healthMax: 1
   isDead: 0
+  client: {fileID: 0}
+  server: {fileID: 0}
   inputMovement: {x: 0, y: 0, z: 0}
   inputMouse: {x: 0, y: 0}
   velocity: {x: 0, y: 0, z: 0}

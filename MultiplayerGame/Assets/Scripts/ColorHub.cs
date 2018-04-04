@@ -7,7 +7,7 @@ public static class ColorHub {
 	public static string[] playerColors = new string[] {
 		"FF404B",
 		"1D1D1D",
-		"F8FF3D",
+		"747474",
 		"FF3D6E",
 		"3EBDFF",
 		"96FF3D"

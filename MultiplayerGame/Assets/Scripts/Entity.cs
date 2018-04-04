@@ -12,6 +12,7 @@ public abstract class Entity : MonoBehaviour {
 	public event Action eventTakeDamage;
 	public event Action eventTakeHeal;
 	public event Action eventDie;
+	public event Action eventRespawn;
 
 	public void TakeDamage (int damage) {
 		healthCurrent = (int)Mathf.Clamp(healthCurrent - damage, 0, healthMax);
@@ -40,6 +41,15 @@ public abstract class Entity : MonoBehaviour {
 			isDead = true;
 			if (eventDie != null) {
 				eventDie();
+			}
+		}
+	}
+
+	public void Respawn() {
+		if (isDead == true) {
+			isDead = false;
+			if (eventRespawn != null) {
+				eventRespawn();
 			}
 		}
 	}
