@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
@@ -12,15 +13,20 @@ public class Server : MonoBehaviour {
 	private int hostId;                         // The Id of our host
 	private int reliableChannel;                // Channel for sending reliable information
 	private int unreliableChannel;              // Channel for sending unreliable information
+	private int reliableFragmentedChannel;		// Channel for sending fragmented reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.5";		// The version number currently used by the server
+	private string versionNumber = "0.1.6";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
 	
 	// All clients
-	public List<Player> players = new List<Player>();			// List of players
+	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // List of players
+	public Dictionary<int, Entity> entities = new Dictionary<int, Entity>();
+	int entityIdIterationCurrent = 0;
+
+	public Transform entitiesContainer;
 
 	// Prefabs
 	public GameObject prefab_Player;
@@ -36,6 +42,7 @@ public class Server : MonoBehaviour {
 		// Setup channels
 		reliableChannel = newConnectionConfig.AddChannel(QosType.Reliable);
 		unreliableChannel = newConnectionConfig.AddChannel(QosType.Unreliable);
+		reliableFragmentedChannel = newConnectionConfig.AddChannel(QosType.ReliableFragmented);
 
 		HostTopology topo = new HostTopology(newConnectionConfig, MAX_CONNECTION);      // Setup topology
 
@@ -48,9 +55,34 @@ public class Server : MonoBehaviour {
 
 	private void Start () {
 		InitializeServer();
+		GetInitialEntities();
 		StartCoroutine(TickUpdate());
+		StartCoroutine(DelayedRemoval());
+	}
+
+	IEnumerator DelayedRemoval () {
+		yield return new WaitForSeconds(10);
+		Entity_Remove(2);
 	}
 	
+	private void GetInitialEntities () {
+		if (GameObject.Find("[Entities]")) {
+			entitiesContainer = GameObject.Find("[Entities]").transform;
+			foreach (Transform entityTransform in entitiesContainer) {
+				Entity entity = entityTransform.GetComponent<Entity>();
+				if (entity != null) {
+					Debug.Log("Creating Entity: " + entityIdIterationCurrent);
+					entities.Add(entityIdIterationCurrent, entity);
+					entity.entityId = entityIdIterationCurrent;
+					entity.server = this;
+					entityIdIterationCurrent++;
+				}
+			}
+		} else {
+			entitiesContainer = new GameObject("[Entities]").transform;
+		}
+	}
+
 		// Update Methods
 	IEnumerator TickUpdate () {
 		while (true) {
@@ -70,13 +102,12 @@ public class Server : MonoBehaviour {
 			int recHostId;
 			int connectionId;
 			int channelId;
-			byte[] recBuffer = new byte[1024];
-			int bufferSize = 1024;
+			byte[] recBuffer = new byte[8192];
 			int dataSize;
 			byte error;
 			NetworkEventType recData = NetworkEventType.Nothing;
 			do {    // Do While ensures that we process all of the sent messages each tick
-				recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
+				recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, recBuffer.Length, out dataSize, out error);
 				switch (recData) {
 					case NetworkEventType.ConnectEvent:
 						Debug.Log("Player " + connectionId + " has connected");
@@ -100,15 +131,15 @@ public class Server : MonoBehaviour {
 
 		string[] splitData = data.Split('|');
 
-		if (splitData.Length > 0) {
+		if (splitData.Length > 0) {		// Make sure that the there is any split Data
 			switch (splitData[0]) {
 
 				case "MyInfo":
-					Receive_MyInfo(connectionId, splitData[1], splitData[2]);
+					Receive_MyInfo(connectionId, splitData);
 					break;
 
 				case "MyPosAndRot":
-					Receive_MyPosAndRot(connectionId, float.Parse(splitData[1]), float.Parse(splitData[2]), float.Parse(splitData[3]));
+					Receive_MyPosAndRot(connectionId, splitData);
 					break;
 
 				case "FireProjectile":
@@ -125,10 +156,8 @@ public class Server : MonoBehaviour {
 		newPlayer.connectionId = connectionId;
 		newPlayer.playerName = "temp";
 		newPlayer.playerColor = ColorHub.GetRandomPlayerColor();
-		players.Add(newPlayer);
-
-		Debug.Log(newPlayer.playerColor);
-
+		players.Add(connectionId, newPlayer);
+		
 		// Spawn the player
 		newPlayer.playerGameObject = (GameObject)Instantiate(prefab_Player);
 		newPlayer.playerController = newPlayer.playerGameObject.GetComponent<PlayerController>();
@@ -136,12 +165,20 @@ public class Server : MonoBehaviour {
 		Color newColor = Color.black;
 		ColorUtility.TryParseHtmlString("#" + newPlayer.playerColor, out newColor);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
+		newPlayer.playerController.connectionId = connectionId;
+		newPlayer.playerController.server = this;
+
+		// Add playerController to entities list
+		entities.Add(entityIdIterationCurrent, newPlayer.playerController as Entity);		// Added the playerController to our entities dictionary
+		newPlayer.playerController.entityId = entityIdIterationCurrent;			// Tell the playerController what it's entityId is
+		entityIdIterationCurrent++;		// Iterate the entityIdNumber
 
 		// When player joins serer, tell them their Id
 		// Reqest player's info
 		string msg = "AskInfo|" + connectionId + "|";
-		foreach (Player player in players) {
-			msg += player.playerName + "%" + player.connectionId + "%" + player.playerColor + "|";
+		foreach (KeyValuePair<int, Player> playerAndId in players) {
+			Player player = playerAndId.Value;
+			msg += player.playerName + "%" + player.connectionId + "%" + player.playerController.entityId + "%" + player.playerColor + "|";
 		}
 		msg = msg.Trim('|');
 
@@ -150,10 +187,16 @@ public class Server : MonoBehaviour {
 		Send(msg, reliableChannel, connectionId);
 	}
 
+	public void CreateEntity (Entity entity) {
+		entities.Add(entityIdIterationCurrent, entity);
+		Send("CreateEntity|" + entityIdIterationCurrent, reliableChannel, players);
+		entityIdIterationCurrent++;
+	}
+
 	private void OnDisconnection (int connectionId) {
 		// Remove this player from our client list
-		Destroy(players.Find(x => x.connectionId == connectionId).playerGameObject);
-		players.Remove(players.Find(x => x.connectionId == connectionId));
+		Destroy(players[connectionId].playerGameObject);
+		players.Remove(connectionId);
 
 		// Tell everybody else that somebody has disconnected
 		Send("PlayerDisconnected|" + connectionId, reliableChannel, players);
@@ -163,7 +206,8 @@ public class Server : MonoBehaviour {
 	private void Send_PlayerPosAndRot () {
 		string message = "PlayerPositions|";
 
-		foreach (Player player in players) {
+		foreach (KeyValuePair<int, Player> playerAndId in players) {
+			Player player = playerAndId.Value;
 			message += player.connectionId + "%" + player.playerGameObject.transform.position.x + "%" + player.playerGameObject.transform.position.y + "%" + player.playerController.playerSprite.eulerAngles.z + "|";
 		}
 		
@@ -172,38 +216,89 @@ public class Server : MonoBehaviour {
 		Send(message, unreliableChannel, players);
 	}
 
-	public IEnumerator Send_PlayerDied(PlayerController _playerController) {
-		int deadPlayerId = players.Find(x => x.playerController == _playerController).connectionId;
-
-		// Tell everyone a player died
-		string message1 = "PlayerDied|" + deadPlayerId;
-		Send(message1, reliableChannel, players);
-
-		yield return new WaitForSeconds(3);
-
-		// Tell everyone a player respawned
-		string message2 = "PlayerRespawned|" + deadPlayerId;
-		Debug.Log("Sending Respawn");
-		_playerController.Respawn();
-		Send(message2, reliableChannel, players);
+	public void Send_EntityTakeDamage (int entityId, int damage) {
+		string message = "EntityTakeDamage|" + entityId + "|" + damage;
+		Send(message, reliableChannel, players);
 	}
 
-		// Receive Methods
-	private void Receive_MyPosAndRot(int connectionId, float posX, float posY, float rot) {
-		players.Find(x => x.connectionId == connectionId).playerController.desiredPosition = new Vector3(posX, posY, 0);
-		players.Find(x => x.connectionId == connectionId).playerController.desiredRotation = rot;
+	public void Send_EntityTakeHeal(int entityId, int heal) {
+		string message = "EntityTakeHeal|" + entityId + "|" + heal;
+		Send(message, reliableChannel, players);
 	}
 
-	private void Receive_MyInfo (int connectionId, string playerName, string playersVersionNumber) {
-		// Link name to the connectionId
-		Player currentPlayer = players.Find(x => x.connectionId == connectionId);
-		currentPlayer.playerName = playerName;
+	public void Send_EntityDie(int entityId) {
+		string message = "EntityDie|" + entityId;
+		Send(message, reliableChannel, players);
+	}
 
-		if (playersVersionNumber != versionNumber) {
-			StartCoroutine(Send_WrongVersion(connectionId));
+	public void Send_EntityRespawn(int entityId) {
+		string message = "EntityRespawn|" + entityId;
+		Send(message, reliableChannel, players);
+	}
+
+	public void Send_InitializeEntities (int connectionId) {
+		string newMessage = "InitializeEntities|";
+
+		foreach (KeyValuePair<int, Entity> entityAndId in entities) {
+			if ((entityAndId.Value is PlayerController) == false) {		// Don't send player entites
+				int entityId = entityAndId.Key;
+				Entity entity = entityAndId.Value;
+				string entityTypeName = entityAndId.Value.GetType().ToString();
+				int entityHealth = entityAndId.Value.healthCurrent;
+				newMessage += entityId + "%" + entityTypeName + "%" + entityHealth + "%" + entity.transform.position.x + "%" + entity.transform.position.y + "|";
+			}
+		}
+
+		newMessage = newMessage.Trim('|');
+
+		Send(newMessage, reliableFragmentedChannel, connectionId);
+	}
+
+	public void Entity_Remove (int entityId) {
+		if (entities.ContainsKey(entityId)) {
+			Destroy(entities[entityId].gameObject);
+			entities.Remove(entityId);
+			Send("EntityRemove|" + entityId, reliableChannel, players);
+		}
+	}
+
+	// Receive Methods
+	private void Receive_MyPosAndRot(int connectionId, string[] splitData) {
+		if (VerifySplitData(connectionId, splitData, 4)) {
+			// Verify split data parsability
+			float splitData1, splitData2, splitData3;
+			if (float.TryParse(splitData[1], out splitData1) && float.TryParse(splitData[2], out splitData2) && float.TryParse(splitData[3], out splitData3)) {
+				// Get split data
+				float posX = splitData1;
+				float posY = splitData2;
+				float rot = splitData3;
+
+				// Position player
+				players[connectionId].playerController.desiredPosition = new Vector3(posX, posY, 0);
+				players[connectionId].playerController.desiredRotation = rot;
+			}
+		}
+	}
+
+	private void Receive_MyInfo (int connectionId, string[] splitData) {
+		if (VerifySplitData(connectionId, splitData, 3)) {		// Make sure the split Data is equal to 3, otherwise, send an error
+			// Get split data
+			string playerName = splitData[1];
+			string playerVersionNumber = splitData[2];
+
+			// Link name to the connectionId
+			Player currentPlayer = players[connectionId];
+			currentPlayer.playerName = playerName;
+			Send_InitializeEntities(connectionId);		// Send the player the initializeEntities info
+
+			if (playerVersionNumber != versionNumber) {
+				StartCoroutine(Send_WrongVersion(connectionId));
+			} else {
+				// Tell everybody that a new player has connected
+				Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerController.entityId + "|" + currentPlayer.playerColor, reliableChannel, players);
+			}
 		} else {
-			// Tell everybody that a new player has connected
-			Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerColor, reliableChannel, players);
+
 		}
 	}
 
@@ -214,32 +309,48 @@ public class Server : MonoBehaviour {
 	}
 
 	private void Receive_FireProjectile(int connectionId, string[] splitData) {
-		Player parentPlayer = players.Find(x => x.connectionId == connectionId);
+		if (VerifySplitData(connectionId, splitData, 5)) {
+			float splitData1, splitData2, splitData3, splitData4;
+			// Verify split data parsability
+			if (float.TryParse(splitData[1], out splitData1) && float.TryParse(splitData[2], out splitData2) && float.TryParse(splitData[3], out splitData3) && float.TryParse(splitData[4], out splitData4)) {
+				// Get split data
+				Player parentPlayer = players[connectionId];
+				Vector2 origin = new Vector2(splitData1, splitData2);
+				Vector2 velocity = new Vector2(splitData3, splitData4);
 
-		Vector2 origin = new Vector2(float.Parse(splitData[1]), float.Parse(splitData[2]));
-		Vector2 velocity = new Vector2(float.Parse(splitData[3]), float.Parse(splitData[4]));
+				// Create projectile
+				GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
+				Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
+				newProjectileClass.velocity = velocity;
+				newProjectileClass.parentEntity = parentPlayer.playerController as Entity;
+				newProjectileClass.isServerSide = true;
 
-		GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
-		Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
-		newProjectileClass.velocity = velocity;
-		newProjectileClass.parentEntity = parentPlayer.playerController as Entity;
-		newProjectileClass.isServerSide = true;
-
-		Send("CreateProjectile|" + parentPlayer.connectionId + "|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y, reliableChannel, players);
+				Send("CreateProjectile|" + parentPlayer.connectionId + "|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y, reliableChannel, players);
+			}
+		}
 	}
 
 	// Both Send Methods
 	private void Send (string message, int channelId, int connectionId) {
-		List<Player> newListPlayers = new List<Player>();
-		newListPlayers.Add(players.Find(p => p.connectionId == connectionId));
-		Send(message, channelId, newListPlayers);
+		Dictionary<int, Player> newDictionaryPlayers = new Dictionary<int, Player>();
+		newDictionaryPlayers.Add(connectionId, players[connectionId]);
+		Send(message, channelId, newDictionaryPlayers);
 	}
 	
-	private void Send (string message, int channelId, List<Player> listPlayers) {
+	private void Send (string message, int channelId, Dictionary<int, Player> listPlayers) {
 		byte[] msg = Encoding.Unicode.GetBytes(message);        // Turn string message into byte array
-		foreach (Player player in listPlayers) {
+		foreach (KeyValuePair<int, Player> playerAndId in listPlayers) {
+			Player player = playerAndId.Value;
 			NetworkTransport.Send(hostId, player.connectionId, channelId, msg, message.Length * sizeof(char), out error);
 		}
 	}
 
+	private bool VerifySplitData (int connectionId, string[] splitData, int desiredLength) {
+		if (splitData.Length == desiredLength) {
+			return true;
+		} else {
+			Send("Error: received message invalid " + string.Join("", splitData), unreliableChannel, connectionId);
+			return false;
+		}
+	}
 }

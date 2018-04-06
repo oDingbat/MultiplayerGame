@@ -5,7 +5,7 @@ using UnityEngine;
 public class PlayerController : Entity {
 
 	public Client client;
-	public Server server;
+	public int connectionId;
 
 	public Vector3 inputMovement;
 	public Vector2 inputMouse;
@@ -78,7 +78,7 @@ public class PlayerController : Entity {
 		}
 		inputMouse = (mouseCamera.ScreenToWorldPoint(Input.mousePosition) + new Vector3(0, 0, 1));
 
-		velocity = Vector3.Lerp(velocity, inputMovement * speed * Mathf.Abs(Mathf.Clamp(aimTime * 2.75f, 0.0f, 0.9f) - 1), 3f * Time.deltaTime);
+		velocity = Vector3.Lerp(velocity, inputMovement * speed * 20 * Mathf.Abs(Mathf.Clamp(aimTime * 2.75f, 0.0f, 0.9f) - 1), 3f * Time.deltaTime);
 
 		transform.position += velocity * Time.deltaTime;
 
@@ -93,7 +93,9 @@ public class PlayerController : Entity {
 			aimTime += Time.deltaTime;
 			aimIndicator.transform.position = ((Vector2)mouseCamera.ScreenToWorldPoint(mousePosClickLeft) + inputMouse) / 2;
 			aimIndicator.localScale = new Vector3(1, Vector2.Distance(mouseCamera.ScreenToWorldPoint(mousePosClickLeft), inputMouse) * 2, 1);
-			
+
+			FireProjectile();
+
 			aimVector = (inputMouse - (Vector2)mouseCamera.ScreenToWorldPoint(mousePosClickLeft)).normalized;
 			aimIndicator.rotation = Quaternion.Euler(0, 0, Mathf.Atan2(aimVector.y, aimVector.x) * Mathf.Rad2Deg + 90);
 		}
@@ -117,19 +119,19 @@ public class PlayerController : Entity {
 		//GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, transform.position, Quaternion.Euler(0, 0, (Mathf.Atan2(aimVector.y, aimVector.x) * Mathf.Rad2Deg) + 90));
 		//Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
 		//newProjectileClass.velocity = -aimVector * Mathf.Clamp(aimTime, 0.125f, 0.75f) * 15f;
-		client.Send_Projectile(transform.position, -aimVector * Mathf.Clamp(aimTime, 0.125f, 0.75f) * 15f);
+		client.Send_Projectile(transform.position, -aimVector * Mathf.Clamp(aimTime * 50, 0.125f, 0.75f) * 15f);
 	}
 
 	void UpdateMovement_Peer () {
 		// Code for manipulating the player client side when this player is one of the client's peers
-		transform.position = Vector3.Lerp(transform.position, desiredPosition, 20 * Time.deltaTime);
-		playerSprite.transform.rotation = Quaternion.Lerp(playerSprite.transform.rotation, Quaternion.Euler(0, 0, desiredRotation), 45 * Time.deltaTime);
+		transform.position = Vector3.Lerp(transform.position, desiredPosition, 40 * Time.deltaTime);
+		playerSprite.transform.rotation = Quaternion.Lerp(playerSprite.transform.rotation, Quaternion.Euler(0, 0, desiredRotation), 75 * Time.deltaTime);
 	}
 
 	void UpdateMovement_Server () {
 		// Code for manipulating the player server side
-		transform.position = desiredPosition;
-		playerSprite.transform.eulerAngles = new Vector3(0, 0, desiredRotation);
+		transform.position = Vector3.Lerp(transform.position, desiredPosition, 40 * Time.deltaTime);
+		playerSprite.transform.rotation = Quaternion.Lerp(playerSprite.transform.rotation, Quaternion.Euler(0, 0, desiredRotation), 75 * Time.deltaTime);
 	}
 
 	void UpdateAll () {
@@ -138,16 +140,10 @@ public class PlayerController : Entity {
 
 	void OnDie () {
 		playerSprite.gameObject.SetActive(false);
-		if (server != null) {
-			Debug.Log("Sending Death");
-			StartCoroutine(server.Send_PlayerDied(this));
-		}
 	}
 	
 	void OnRespawn () {
 		playerSprite.gameObject.SetActive(true);
-		isDead = false;
-		healthCurrent = healthMax;
 	}
 
 }

@@ -22,7 +22,7 @@ public class Node : Entity {
 	}
 
 	void OnDie () {
-		collider.enabled = false;
+		
 	}
 
 	void Update () {

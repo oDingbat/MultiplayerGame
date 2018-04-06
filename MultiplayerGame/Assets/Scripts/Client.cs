@@ -16,9 +16,10 @@ public class Client : MonoBehaviour {
 	private int connectionId;                   // The Id of our connection
 	private int reliableChannel;                // Channel for sending reliable information
 	private int unreliableChannel;              // Channel for sending unreliable information
+	private int reliableFragmentedChannel;	// Channel for sending fragmented unreliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.5";     // The version number currently used by the server
+	private string versionNumber = "0.1.6";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -38,11 +39,13 @@ public class Client : MonoBehaviour {
 
 	[Space(10)] [Header("Prefabs")]
 	public GameObject prefab_Player;            // The prefab for player GameObjects
-	public GameObject prefab_Projectile;		// The prefab for regular projectiles
+	public GameObject prefab_Projectile;        // The prefab for regular projectiles
+
+	[Space(10)] [Header("Entity Prefabs")]
+	public GameObject entityPrefab_Node;		// The prefab for Nodes
 
 	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // A dictionary of Players where the int key is that player's clientId
-
-
+	public Dictionary<int, Entity> entities = new Dictionary<int, Entity>();
 
 	public void Connect() {
 		// This method connects the client to the server
@@ -55,14 +58,13 @@ public class Client : MonoBehaviour {
 			ConnectionConfig cc = new ConnectionConfig();
 			reliableChannel = cc.AddChannel(QosType.Reliable);          // Adds the reliable channel
 			unreliableChannel = cc.AddChannel(QosType.Unreliable);      // Adds the unreliable channel
+			reliableFragmentedChannel = cc.AddChannel(QosType.ReliableFragmented);
 			HostTopology topo = new HostTopology(cc, MAX_CONNECTION);       // Setup topology
 			hostId = NetworkTransport.AddHost(topo, 0);                                         // Gets the Id for the host
 
 			Debug.Log("Connecting with Ip: " + ipAddressServer + " port: " + port);
 
 			connectionId = NetworkTransport.Connect(hostId, ipAddressServer, port, 0, out error);   // Gets the Id for the connection (not the same as ourClientId)
-
-			Debug.Log(connectionId);
 
 			isAttemptingConnection = true;
 		}
@@ -98,13 +100,12 @@ public class Client : MonoBehaviour {
 		int recHostId;
 		int connectionId;
 		int channelId;
-		byte[] recBuffer = new byte[1024];
-		int bufferSize = 1024;
+		byte[] recBuffer = new byte[8000];
 		int dataSize;
 		byte error;
 		NetworkEventType recData = NetworkEventType.Nothing;
 		do {        // Do While ensures that we process all of the sent messages each tick
-			recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, bufferSize, out dataSize, out error);
+			recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, recBuffer.Length, out dataSize, out error);
 			//Debug.Log(recData);
 
 			switch (recData) {
@@ -125,6 +126,7 @@ public class Client : MonoBehaviour {
 	}
 
 	private void ParseData(int connectionId, int channelId, byte[] recBuffer, int dataSize) {
+		//Debug.Log(dataSize);
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
 		//Debug.Log("Recieving : " + data);
 		
@@ -137,6 +139,10 @@ public class Client : MonoBehaviour {
 					Receive_AskInfo(splitData);
 					break;
 
+				case "InitializeEntities":
+					Receive_InitializeEntities(splitData);
+					break;
+
 				case "WrongVersion":
 					Receive_WrongVersion();
 					break;
@@ -145,16 +151,8 @@ public class Client : MonoBehaviour {
 					Receive_PlayerConnected(splitData);
 					break;
 
-				case "PlayerDied":
-					Receive_PlayerDied(splitData);
-					break;
-
-				case "PlayerRespawned":
-					Receive_PlayerRespawned(splitData);
-					break;
-
 				case "PlayerDisconnected":
-					Receive_PlayerDisconnected(int.Parse(splitData[1]));
+					Receive_PlayerDisconnected(splitData);
 					break;
 
 				case "PlayerPositions":
@@ -164,23 +162,52 @@ public class Client : MonoBehaviour {
 				case "CreateProjectile":
 					Receive_CreateProjectile(splitData);
 					break;
+
+				case "EntityTakeDamage":
+					Receive_EntityTakeDamage(splitData);
+					break;
+
+				case "EntityTakeHeal":
+					Receive_EntityTakeHeal(splitData);
+					break;
+
+				case "EntityDie":
+					Receive_EntityDie(splitData);
+					break;
+
+				case "EntityRespawn":
+					Receive_EntityRespawn(splitData);
+					break;
+
+				case "EntityRemove":
+					Receive_EntityRemove(splitData);
+					break;
 			}
 		}
 	}
 
 	// Connection/Disconnection Methods
-	private void SpawnPlayer(string playerName, int connectionId, string playerColor) {
+	private void SpawnPlayer(string playerName, int connectionId, int entityId, string playerColor) {
 		Player newPlayer = new Player();
 		
+		// Spawn Player
 		newPlayer.playerName = playerName;
 		newPlayer.connectionId = connectionId;
 		newPlayer.playerGameObject = (GameObject)Instantiate(prefab_Player);
 		newPlayer.playerGameObject.GetComponentInChildren<TextMesh>().text = newPlayer.playerName;
 		newPlayer.playerController = newPlayer.playerGameObject.GetComponentInChildren<PlayerController>();
+		newPlayer.playerController.entityId = entityId;
 		Color colorParse = Color.black;
 		ColorUtility.TryParseHtmlString("#" + playerColor, out colorParse);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = colorParse;
 
+		// Add player to entities
+		if (entities.ContainsKey(entityId)) {
+			entities[entityId] = newPlayer.playerController;
+		} else {
+			entities.Add(entityId, newPlayer.playerController as Entity);
+		}
+		
 		if (connectionId == ourClientId) { // Is this playerGameObject ours?
 			newPlayer.playerController.playerType = PlayerController.PlayerType.Client;
 			newPlayer.playerGameObject.layer = LayerMask.NameToLayer("ClientPlayer");
@@ -189,7 +216,11 @@ public class Client : MonoBehaviour {
 			// Currently this is the point at which the client's player becomes active and the GUI closes, we should probably change that! D:
 		}
 
-		players.Add(connectionId, newPlayer);
+		if (players.ContainsKey(connectionId)) {
+			players[connectionId] = newPlayer;
+		} else {
+			players.Add(connectionId, newPlayer);
+		}
 	}
 
 	// Send Methods
@@ -197,6 +228,7 @@ public class Client : MonoBehaviour {
 		// Send our position to the server
 		Vector2 myPosition = players[ourClientId].playerGameObject.transform.position;
 		float myRotation = players[ourClientId].playerController.playerSprite.eulerAngles.z;
+		//string m = "MyPosAndRot|" + myPosition.x.ToString() + "|" + myPosition.y.ToString() + "|" + myRotation.ToString();
 		string m = "MyPosAndRot|" + myPosition.x.ToString() + "|" + myPosition.y.ToString() + "|" + myRotation.ToString();
 		Send(m, unreliableChannel);
 	}
@@ -208,20 +240,12 @@ public class Client : MonoBehaviour {
 
 	// Receive Methods
 	private void Receive_PlayerConnected (string[] splitData) {
-		SpawnPlayer(splitData[1], int.Parse(splitData[2]), splitData[3]);
+		SpawnPlayer(splitData[1], int.Parse(splitData[2]), int.Parse(splitData[3]), splitData[4]);
 	}
 
 	private void Receive_WrongVersion () {
 		Debug.Log("Server says we have the wrong version number.");
 		text_Error.text = "Error: outdated version number (v"+ versionNumber + ")";
-	}
-
-	private void Receive_PlayerDied (string[] splitData) {
-		int deadPlayerConnectionId = int.Parse(splitData[1]);
-		Debug.Log("Player Died");
-		//if (deadPlayerConnectionId == ourClientId) {
-		players[deadPlayerConnectionId].playerController.Die();
-		//}
 	}
 
 	private void Receive_PlayerRespawned(string[] splitData) {
@@ -232,9 +256,11 @@ public class Client : MonoBehaviour {
 		//}
 	}
 
-	private void Receive_PlayerDisconnected(int cnnId) {
-		Destroy(players[cnnId].playerGameObject);
-		players.Remove(cnnId);
+	private void Receive_PlayerDisconnected(string[] splitData) {
+		int connectionId = int.Parse(splitData[1]);
+		Destroy(players[connectionId].playerGameObject);
+		entities.Remove(players[connectionId].playerController.entityId);
+		players.Remove(connectionId);
 	}
 
 	private void Receive_AskInfo (string[] splitData) {
@@ -248,7 +274,31 @@ public class Client : MonoBehaviour {
 		// Create all of the other players
 		for (int i = 2; i < splitData.Length - 1; i++) {
 			string[] d = splitData[i].Split('%');
-			SpawnPlayer(d[0], int.Parse(d[1]), d[2]);
+			SpawnPlayer(d[0], int.Parse(d[1]), int.Parse(d[2]), d[3]);
+		}
+	}
+
+	private void Receive_InitializeEntities (string[] splitData) {
+		Debug.Log(splitData.Length);
+		for (int i = 1; i < splitData.Length; i++) {
+			string[] splitDataBits = splitData[i].Split('%');
+			// Get data bits
+			int entityId = int.Parse(splitDataBits[0]);
+			string entityType = splitDataBits[1];
+			int entityHealth = int.Parse(splitDataBits[2]);
+			float posX = float.Parse(splitDataBits[3]);
+			float posY = float.Parse(splitDataBits[4]);
+
+			if (!entities.ContainsKey(entityId)) {     // Make sure we don't already have this entity created
+				switch (entityType) {
+					case "Node":
+						GameObject newNodeGameObject = (GameObject)Instantiate(entityPrefab_Node, new Vector3(posX, posY), Quaternion.identity);
+						Entity newNodeEntity = newNodeGameObject.GetComponent<Entity>();
+						newNodeEntity.SetHealth(entityHealth);
+						entities.Add(entityId, newNodeEntity);
+						break;
+				}
+			}
 		}
 	}
 
@@ -274,10 +324,46 @@ public class Client : MonoBehaviour {
 		newProjectileClass.parentEntity = players[int.Parse(splitData[1])].playerController as Entity;
 	}
 
+	private void Receive_EntityTakeDamage(string[] splitData) {
+		int entityId = int.Parse(splitData[1]);
+		if (entities.ContainsKey(entityId)) {
+			int damage = int.Parse(splitData[2]);
+			entities[entityId].TakeDamage(damage);
+		}
+	}
+
+	private void Receive_EntityTakeHeal(string[] splitData) {
+		int entityId = int.Parse(splitData[1]);
+		if (entities.ContainsKey(entityId)) {
+			int heal = int.Parse(splitData[2]);
+			entities[entityId].TakeHeal(heal);
+		}
+	}
+
+	private void Receive_EntityDie(string[] splitData) {
+		int entityId = int.Parse(splitData[1]);
+		if (entities.ContainsKey(entityId)) {
+			entities[entityId].Die();
+		}
+	}
+
+	private void Receive_EntityRespawn(string[] splitData) {
+		int entityId = int.Parse(splitData[1]);
+		if (entities.ContainsKey(entityId)) {
+			entities[entityId].Respawn();
+		}
+	}
+
+	private void Receive_EntityRemove (string[] splitData) {
+		int entityId = int.Parse(splitData[1]);
+		Destroy(entities[entityId].gameObject);
+		entities.Remove(entityId);
+	}
+
 	// Send Method
 	private void Send(string message, int channelId) {
 		byte[] msg = Encoding.Unicode.GetBytes(message);        // Turn string message into byte array
 		NetworkTransport.Send(hostId, connectionId, channelId, msg, message.Length * sizeof(char), out error);
 	}
-
+	
 }

@@ -5,10 +5,15 @@ using System;
 
 public abstract class Entity : MonoBehaviour {
 
+	public int entityId;
+	public Server server;
+
+	// Health information
 	public int healthCurrent = 10;
 	public int healthMax = 10;
 	public bool isDead = false;
 
+	// Events
 	public event Action eventTakeDamage;
 	public event Action eventTakeHeal;
 	public event Action eventDie;
@@ -19,6 +24,18 @@ public abstract class Entity : MonoBehaviour {
 		if (eventTakeDamage != null) {
 			eventTakeDamage();
 		}
+
+		if (server != null) {
+			server.Send_EntityTakeDamage(entityId, damage);
+
+			if (healthCurrent == 0) {
+				Die();
+			}
+		}
+	}
+
+	public void SetHealth (int health) {
+		healthCurrent = health;
 
 		if (healthCurrent == 0) {
 			Die();
@@ -31,8 +48,8 @@ public abstract class Entity : MonoBehaviour {
 			eventTakeHeal();
 		}
 
-		if (healthCurrent == 0) {
-			Die();
+		if (server != null) {
+			server.Send_EntityTakeHeal(entityId, heal);
 		}
 	}
 
@@ -42,14 +59,34 @@ public abstract class Entity : MonoBehaviour {
 			if (eventDie != null) {
 				eventDie();
 			}
+
+			if (server != null) {
+				server.Send_EntityDie(entityId);
+
+				if (this is PlayerController) {
+					StartCoroutine(DelayedRespawn());
+				}
+			}
+		}
+	}
+
+	public IEnumerator DelayedRespawn () {
+		yield return new WaitForSeconds(3);
+		if (isDead == true) {
+			Respawn();
 		}
 	}
 
 	public void Respawn() {
 		if (isDead == true) {
 			isDead = false;
+			healthCurrent = healthMax;
 			if (eventRespawn != null) {
 				eventRespawn();
+			}
+
+			if (server != null) {
+				server.Send_EntityRespawn(entityId);
 			}
 		}
 	}
