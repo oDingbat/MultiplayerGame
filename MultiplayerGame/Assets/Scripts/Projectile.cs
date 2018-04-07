@@ -8,11 +8,12 @@ public class Projectile : MonoBehaviour {
 
 	public Vector2 velocity;
 	float deceleration = 2f;
-	float curve = 0;
+	public float curve = 0;
 
 	public bool isBroken;
 	public bool isStuck;
 	public bool isDecelerated;
+	public int playerId;				// The id of the player who fired this projectile (connectionId)
 
 	public Color colorDecelerated;
 	public SpriteRenderer spriteRenderer;
@@ -31,13 +32,21 @@ public class Projectile : MonoBehaviour {
 			RaycastHit2D hit = Physics2D.Raycast(transform.position, velocity, velocity.magnitude * Time.deltaTime, collisionMask);
 
 			if (hit) {
-				transform.position = hit.point;
+				transform.position = hit.point + (velocity.normalized * 0.05f);
 				
 				if (hit.transform.GetComponent<Entity>() != null) {
 					Entity hitEntity = hit.transform.GetComponent<Entity>();
 					if (parentEntity == null || parentEntity != hitEntity) {        // Make sure players don't damage themselves
 						if (isServerSide == true) {
-							hitEntity.TakeDamage(1);
+							if (hitEntity is Node) {
+								if ((hitEntity as Node).capturedPlayerId == playerId) {
+									hitEntity.TakeHeal(3, playerId);
+								} else {
+									hitEntity.TakeDamage(1, playerId);
+								}
+							} else {
+								hitEntity.TakeDamage(1, playerId);
+							}
 						}
 						if (hitEntity is Node) {
 							transform.parent = hitEntity.transform;
@@ -69,7 +78,6 @@ public class Projectile : MonoBehaviour {
 	}
 
 	IEnumerator BreakProjectile () {
-		Debug.Log("Break");
 		if (isBroken == false) {
 			isBroken = true;
 			if (isDecelerated == true) {

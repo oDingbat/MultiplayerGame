@@ -13,10 +13,11 @@ public class Server : MonoBehaviour {
 	private int hostId;                         // The Id of our host
 	private int reliableChannel;                // Channel for sending reliable information
 	private int unreliableChannel;              // Channel for sending unreliable information
-	private int reliableFragmentedChannel;		// Channel for sending fragmented reliable information
+	private int reliableFragmentedSequencedChannel;     // Channel for sending sequenced fragmented reliable information
+	private int reliableSequencedChannel;		// Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.6";		// The version number currently used by the server
+	private string versionNumber = "0.1.7";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -25,6 +26,8 @@ public class Server : MonoBehaviour {
 	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // List of players
 	public Dictionary<int, Entity> entities = new Dictionary<int, Entity>();
 	int entityIdIterationCurrent = 0;
+
+	public List<Node> nodes = new List<Node>();
 
 	public Transform entitiesContainer;
 
@@ -42,7 +45,8 @@ public class Server : MonoBehaviour {
 		// Setup channels
 		reliableChannel = newConnectionConfig.AddChannel(QosType.Reliable);
 		unreliableChannel = newConnectionConfig.AddChannel(QosType.Unreliable);
-		reliableFragmentedChannel = newConnectionConfig.AddChannel(QosType.ReliableFragmented);
+		reliableFragmentedSequencedChannel = newConnectionConfig.AddChannel(QosType.ReliableFragmentedSequenced);
+		reliableSequencedChannel = newConnectionConfig.AddChannel(QosType.ReliableSequenced);
 
 		HostTopology topo = new HostTopology(newConnectionConfig, MAX_CONNECTION);      // Setup topology
 
@@ -57,12 +61,6 @@ public class Server : MonoBehaviour {
 		InitializeServer();
 		GetInitialEntities();
 		StartCoroutine(TickUpdate());
-		StartCoroutine(DelayedRemoval());
-	}
-
-	IEnumerator DelayedRemoval () {
-		yield return new WaitForSeconds(10);
-		Entity_Remove(2);
 	}
 	
 	private void GetInitialEntities () {
@@ -75,7 +73,13 @@ public class Server : MonoBehaviour {
 					entities.Add(entityIdIterationCurrent, entity);
 					entity.entityId = entityIdIterationCurrent;
 					entity.server = this;
+					entity.networkPerspective = NetworkPerspective.Server;
 					entityIdIterationCurrent++;
+
+					if (entity is Node) {
+						nodes.Add(entity as Node);
+					}
+
 				}
 			}
 		} else {
@@ -102,7 +106,7 @@ public class Server : MonoBehaviour {
 			int recHostId;
 			int connectionId;
 			int channelId;
-			byte[] recBuffer = new byte[8192];
+			byte[] recBuffer = new byte[32000];
 			int dataSize;
 			byte error;
 			NetworkEventType recData = NetworkEventType.Nothing;
@@ -161,10 +165,11 @@ public class Server : MonoBehaviour {
 		// Spawn the player
 		newPlayer.playerGameObject = (GameObject)Instantiate(prefab_Player);
 		newPlayer.playerController = newPlayer.playerGameObject.GetComponent<PlayerController>();
-		newPlayer.playerController.playerType = PlayerController.PlayerType.Server;                 // Set the playerType to Server as to use the server specific code
+		newPlayer.playerController.networkPerspective = NetworkPerspective.Server;                 // Set the playerType to Server as to use the server specific code
 		Color newColor = Color.black;
 		ColorUtility.TryParseHtmlString("#" + newPlayer.playerColor, out newColor);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
+		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.5f);
 		newPlayer.playerController.connectionId = connectionId;
 		newPlayer.playerController.server = this;
 
@@ -200,6 +205,16 @@ public class Server : MonoBehaviour {
 
 		// Tell everybody else that somebody has disconnected
 		Send("PlayerDisconnected|" + connectionId, reliableChannel, players);
+		DestroyPlayerItems(connectionId);
+		
+	}
+
+	public void DestroyPlayerItems (int connectionId) {
+		foreach (Node node in nodes) {
+			if (node.capturedPlayerId == connectionId) {
+				node.Die();
+			}
+		}
 	}
 
 		// Send Methods
@@ -216,13 +231,13 @@ public class Server : MonoBehaviour {
 		Send(message, unreliableChannel, players);
 	}
 
-	public void Send_EntityTakeDamage (int entityId, int damage) {
-		string message = "EntityTakeDamage|" + entityId + "|" + damage;
+	public void Send_EntityTakeDamage (int entityId, int damage, int playerId) {
+		string message = "EntityTakeDamage|" + entityId + "|" + damage + "|" + playerId;
 		Send(message, reliableChannel, players);
 	}
 
-	public void Send_EntityTakeHeal(int entityId, int heal) {
-		string message = "EntityTakeHeal|" + entityId + "|" + heal;
+	public void Send_EntityTakeHeal(int entityId, int heal, int playerId) {
+		string message = "EntityTakeHeal|" + entityId + "|" + heal + "|" + playerId;
 		Send(message, reliableChannel, players);
 	}
 
@@ -236,6 +251,12 @@ public class Server : MonoBehaviour {
 		Send(message, reliableChannel, players);
 	}
 
+	public void Send_NodeCaptureChange (int nodeEntityId, int capturePlayerId) {
+		// This method sends a message to all players that a node (nodeEntityId) has been captured by a player (capturePlayerId)
+		string message = "NodeCaptureChange|" + nodeEntityId + "|" + capturePlayerId;
+		Send(message, reliableChannel, players);
+	}
+
 	public void Send_InitializeEntities (int connectionId) {
 		string newMessage = "InitializeEntities|";
 
@@ -245,13 +266,22 @@ public class Server : MonoBehaviour {
 				Entity entity = entityAndId.Value;
 				string entityTypeName = entityAndId.Value.GetType().ToString();
 				int entityHealth = entityAndId.Value.healthCurrent;
-				newMessage += entityId + "%" + entityTypeName + "%" + entityHealth + "%" + entity.transform.position.x + "%" + entity.transform.position.y + "|";
+				string entitySpecificInfo = "null";
+				if (entity is Node) {
+					entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
+				}
+				newMessage += entityId + "%" + entityTypeName + "%" + entitySpecificInfo + "%" + entityHealth + "%" + entity.transform.position.x + "%" + entity.transform.position.y + "|";
 			}
 		}
 
 		newMessage = newMessage.Trim('|');
 
-		Send(newMessage, reliableFragmentedChannel, connectionId);
+		Send(newMessage, reliableFragmentedSequencedChannel, connectionId);
+	}
+
+	public void Send_PlayerTethered (int connectionId, int nodeEntityId) {
+		string message = "PlayerTethered|" + connectionId + "|" + nodeEntityId;
+		Send(message, reliableChannel, players);
 	}
 
 	public void Entity_Remove (int entityId) {
@@ -289,13 +319,13 @@ public class Server : MonoBehaviour {
 			// Link name to the connectionId
 			Player currentPlayer = players[connectionId];
 			currentPlayer.playerName = playerName;
-			Send_InitializeEntities(connectionId);		// Send the player the initializeEntities info
-
+			
 			if (playerVersionNumber != versionNumber) {
 				StartCoroutine(Send_WrongVersion(connectionId));
 			} else {
 				// Tell everybody that a new player has connected
-				Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerController.entityId + "|" + currentPlayer.playerColor, reliableChannel, players);
+				Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerController.entityId + "|" + currentPlayer.playerColor, reliableSequencedChannel, players);
+				Send_InitializeEntities(connectionId);      // Send the player the initializeEntities info
 			}
 		} else {
 
@@ -309,23 +339,27 @@ public class Server : MonoBehaviour {
 	}
 
 	private void Receive_FireProjectile(int connectionId, string[] splitData) {
-		if (VerifySplitData(connectionId, splitData, 5)) {
-			float splitData1, splitData2, splitData3, splitData4;
+		if (VerifySplitData(connectionId, splitData, 6)) {
+			float splitData1, splitData2, splitData3, splitData4, splitData5;
 			// Verify split data parsability
-			if (float.TryParse(splitData[1], out splitData1) && float.TryParse(splitData[2], out splitData2) && float.TryParse(splitData[3], out splitData3) && float.TryParse(splitData[4], out splitData4)) {
+			if (float.TryParse(splitData[1], out splitData1) && float.TryParse(splitData[2], out splitData2) && float.TryParse(splitData[3], out splitData3) && float.TryParse(splitData[4], out splitData4) && float.TryParse(splitData[5], out splitData5)) {
 				// Get split data
 				Player parentPlayer = players[connectionId];
 				Vector2 origin = new Vector2(splitData1, splitData2);
 				Vector2 velocity = new Vector2(splitData3, splitData4);
+				float curve = splitData5;
 
 				// Create projectile
 				GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
+				newProjectile.transform.localScale = Vector3.one * (velocity.magnitude / 4);
 				Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
+				newProjectileClass.playerId = connectionId;
 				newProjectileClass.velocity = velocity;
+				newProjectileClass.curve = curve;
 				newProjectileClass.parentEntity = parentPlayer.playerController as Entity;
 				newProjectileClass.isServerSide = true;
 
-				Send("CreateProjectile|" + parentPlayer.connectionId + "|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y, reliableChannel, players);
+				Send("CreateProjectile|" + parentPlayer.connectionId + "|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y + "|" + splitData5, reliableChannel, players);
 			}
 		}
 	}

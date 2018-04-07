@@ -16,10 +16,11 @@ public class Client : MonoBehaviour {
 	private int connectionId;                   // The Id of our connection
 	private int reliableChannel;                // Channel for sending reliable information
 	private int unreliableChannel;              // Channel for sending unreliable information
-	private int reliableFragmentedChannel;	// Channel for sending fragmented unreliable information
+	private int reliableFragmentedSequencedChannel;     // Channel for sending sequenced fragmented reliable information
+	private int reliableSequencedChannel;       // Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.6";     // The version number currently used by the server
+	private string versionNumber = "0.1.7";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -52,14 +53,17 @@ public class Client : MonoBehaviour {
 		if (isAttemptingConnection == false && isConnected == false) {     // Make sure we're not already connected and we're not already attempting to connect to server
 			Debug.Log("Attempting to connect to server...");
 			playerName = inputField_PlayerName.text;
-			ipAddressServer = "174.138.46.138";								// TODO: probably shouldn't hardcode this?
+			//ipAddressServer = "174.138.46.138";								// TODO: probably shouldn't hardcode this?
+			ipAddressServer = "127.0.0.1";								// TODO: probably shouldn't hardcode this?
 
 			NetworkTransport.Init();        // Initialize NetworkTransport
-			ConnectionConfig cc = new ConnectionConfig();
-			reliableChannel = cc.AddChannel(QosType.Reliable);          // Adds the reliable channel
-			unreliableChannel = cc.AddChannel(QosType.Unreliable);      // Adds the unreliable channel
-			reliableFragmentedChannel = cc.AddChannel(QosType.ReliableFragmented);
-			HostTopology topo = new HostTopology(cc, MAX_CONNECTION);       // Setup topology
+			ConnectionConfig newConnectionConfig = new ConnectionConfig();
+			reliableChannel = newConnectionConfig.AddChannel(QosType.Reliable);
+			unreliableChannel = newConnectionConfig.AddChannel(QosType.Unreliable);
+			reliableFragmentedSequencedChannel = newConnectionConfig.AddChannel(QosType.ReliableFragmentedSequenced);
+			reliableSequencedChannel = newConnectionConfig.AddChannel(QosType.ReliableSequenced);
+
+			HostTopology topo = new HostTopology(newConnectionConfig, MAX_CONNECTION);       // Setup topology
 			hostId = NetworkTransport.AddHost(topo, 0);                                         // Gets the Id for the host
 
 			Debug.Log("Connecting with Ip: " + ipAddressServer + " port: " + port);
@@ -100,7 +104,7 @@ public class Client : MonoBehaviour {
 		int recHostId;
 		int connectionId;
 		int channelId;
-		byte[] recBuffer = new byte[8000];
+		byte[] recBuffer = new byte[32000];
 		int dataSize;
 		byte error;
 		NetworkEventType recData = NetworkEventType.Nothing;
@@ -126,7 +130,6 @@ public class Client : MonoBehaviour {
 	}
 
 	private void ParseData(int connectionId, int channelId, byte[] recBuffer, int dataSize) {
-		//Debug.Log(dataSize);
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
 		//Debug.Log("Recieving : " + data);
 		
@@ -136,6 +139,7 @@ public class Client : MonoBehaviour {
 			switch (splitData[0]) {
 
 				case "AskInfo":
+					Debug.Log(data);
 					Receive_AskInfo(splitData);
 					break;
 
@@ -182,6 +186,14 @@ public class Client : MonoBehaviour {
 				case "EntityRemove":
 					Receive_EntityRemove(splitData);
 					break;
+
+				case "NodeCaptureChange":
+					Receive_NodeCaptureChange(splitData);
+					break;
+
+				case "PlayerTethered":
+					Receive_PlayerTethered(splitData);
+					break;
 			}
 		}
 	}
@@ -189,7 +201,7 @@ public class Client : MonoBehaviour {
 	// Connection/Disconnection Methods
 	private void SpawnPlayer(string playerName, int connectionId, int entityId, string playerColor) {
 		Player newPlayer = new Player();
-		
+				
 		// Spawn Player
 		newPlayer.playerName = playerName;
 		newPlayer.connectionId = connectionId;
@@ -197,9 +209,12 @@ public class Client : MonoBehaviour {
 		newPlayer.playerGameObject.GetComponentInChildren<TextMesh>().text = newPlayer.playerName;
 		newPlayer.playerController = newPlayer.playerGameObject.GetComponentInChildren<PlayerController>();
 		newPlayer.playerController.entityId = entityId;
+		newPlayer.playerColor = playerColor;
 		Color colorParse = Color.black;
 		ColorUtility.TryParseHtmlString("#" + playerColor, out colorParse);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = colorParse;
+		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.5f);
+
 
 		// Add player to entities
 		if (entities.ContainsKey(entityId)) {
@@ -209,7 +224,7 @@ public class Client : MonoBehaviour {
 		}
 		
 		if (connectionId == ourClientId) { // Is this playerGameObject ours?
-			newPlayer.playerController.playerType = PlayerController.PlayerType.Client;
+			newPlayer.playerController.networkPerspective = NetworkPerspective.Client;
 			newPlayer.playerGameObject.layer = LayerMask.NameToLayer("ClientPlayer");
 			ui_LoginScreen.gameObject.SetActive(false);
 			isLoaded = true;
@@ -233,14 +248,16 @@ public class Client : MonoBehaviour {
 		Send(m, unreliableChannel);
 	}
 
-	public void Send_Projectile (Vector2 origin, Vector2 velocity) {
-		string newMessage = "FireProjectile|" + origin.x.ToString() + "|" + origin.y.ToString() + "|" + velocity.x.ToString() + "|" + velocity.y.ToString();
+	public void Send_Projectile (Vector2 origin, Vector2 velocity, float curve) {
+		string newMessage = "FireProjectile|" + origin.x.ToString() + "|" + origin.y.ToString() + "|" + velocity.x.ToString() + "|" + velocity.y.ToString() + "|" + curve.ToString();
 		Send(newMessage, reliableChannel);
 	}
 
 	// Receive Methods
 	private void Receive_PlayerConnected (string[] splitData) {
-		SpawnPlayer(splitData[1], int.Parse(splitData[2]), int.Parse(splitData[3]), splitData[4]);
+		if (int.Parse(splitData[2]) != ourClientId) {
+			SpawnPlayer(splitData[1], int.Parse(splitData[2]), int.Parse(splitData[3]), splitData[4]);
+		}
 	}
 
 	private void Receive_WrongVersion () {
@@ -272,30 +289,33 @@ public class Client : MonoBehaviour {
 		Send(newMessage, reliableChannel);
 
 		// Create all of the other players
-		for (int i = 2; i < splitData.Length - 1; i++) {
+		for (int i = 2; i < splitData.Length; i++) {
 			string[] d = splitData[i].Split('%');
 			SpawnPlayer(d[0], int.Parse(d[1]), int.Parse(d[2]), d[3]);
 		}
 	}
 
 	private void Receive_InitializeEntities (string[] splitData) {
-		Debug.Log(splitData.Length);
 		for (int i = 1; i < splitData.Length; i++) {
 			string[] splitDataBits = splitData[i].Split('%');
 			// Get data bits
 			int entityId = int.Parse(splitDataBits[0]);
 			string entityType = splitDataBits[1];
-			int entityHealth = int.Parse(splitDataBits[2]);
-			float posX = float.Parse(splitDataBits[3]);
-			float posY = float.Parse(splitDataBits[4]);
-
+			string entitySpecificInfo = splitDataBits[2];
+			int entityHealth = int.Parse(splitDataBits[3]);
+			float posX = float.Parse(splitDataBits[4]);
+			float posY = float.Parse(splitDataBits[5]);
+		
 			if (!entities.ContainsKey(entityId)) {     // Make sure we don't already have this entity created
 				switch (entityType) {
 					case "Node":
 						GameObject newNodeGameObject = (GameObject)Instantiate(entityPrefab_Node, new Vector3(posX, posY), Quaternion.identity);
-						Entity newNodeEntity = newNodeGameObject.GetComponent<Entity>();
-						newNodeEntity.SetHealth(entityHealth);
-						entities.Add(entityId, newNodeEntity);
+						Node newNode = newNodeGameObject.GetComponent<Node>();
+						newNode.client = this;
+						Debug.Log(splitData[i]);
+						newNode.SetHealth(entityHealth);
+						newNode.TriggerNodeCaptureChange(int.Parse(entitySpecificInfo));
+						entities.Add(entityId, newNode);
 						break;
 				}
 			}
@@ -317,26 +337,32 @@ public class Client : MonoBehaviour {
 	private void Receive_CreateProjectile (string[] splitData) {
 		Vector2 origin = new Vector2(float.Parse(splitData[2]), float.Parse(splitData[3]));
 		Vector2 velocity = new Vector2(float.Parse(splitData[4]), float.Parse(splitData[5]));
+		float curve = float.Parse(splitData[6]);
 
 		GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
+		//newProjectile.transform.localScale = Vector3.one * (velocity.magnitude / 5.625f);
 		Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
 		newProjectileClass.velocity = velocity;
+		newProjectileClass.curve = curve;
+		newProjectileClass.playerId = int.Parse(splitData[1]);
 		newProjectileClass.parentEntity = players[int.Parse(splitData[1])].playerController as Entity;
 	}
 
 	private void Receive_EntityTakeDamage(string[] splitData) {
 		int entityId = int.Parse(splitData[1]);
+		int playerId = int.Parse(splitData[3]);
 		if (entities.ContainsKey(entityId)) {
 			int damage = int.Parse(splitData[2]);
-			entities[entityId].TakeDamage(damage);
+			entities[entityId].TakeDamage(damage, playerId);
 		}
 	}
 
 	private void Receive_EntityTakeHeal(string[] splitData) {
 		int entityId = int.Parse(splitData[1]);
+		int playerId = int.Parse(splitData[3]);
 		if (entities.ContainsKey(entityId)) {
 			int heal = int.Parse(splitData[2]);
-			entities[entityId].TakeHeal(heal);
+			entities[entityId].TakeHeal(heal, playerId);
 		}
 	}
 
@@ -358,6 +384,20 @@ public class Client : MonoBehaviour {
 		int entityId = int.Parse(splitData[1]);
 		Destroy(entities[entityId].gameObject);
 		entities.Remove(entityId);
+	}
+
+	private void Receive_NodeCaptureChange (string[] splitData) {
+		int entityId = int.Parse(splitData[1]);
+		int captureConnectionId = int.Parse(splitData[2]);
+		if (entities[entityId] != null) {
+			(entities[entityId] as Node).TriggerNodeCaptureChange(captureConnectionId);
+		}
+	}
+
+	private void Receive_PlayerTethered(string[] splitData) {
+		int playerId = int.Parse(splitData[1]);
+		int nodeEntityId = int.Parse(splitData[2]);
+		players[playerId].playerController.SetTether(nodeEntityId);
 	}
 
 	// Send Method

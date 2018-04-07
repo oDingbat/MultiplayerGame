@@ -4,8 +4,9 @@ using UnityEngine;
 
 public class PlayerController : Entity {
 
-	public Client client;
 	public int connectionId;
+
+	public LayerMask nodeMask;
 
 	public Vector3 inputMovement;
 	public Vector2 inputMouse;
@@ -20,9 +21,6 @@ public class PlayerController : Entity {
 
 	public Transform playerSprite;
 
-	public PlayerType playerType = PlayerType.Peer;						// Keeps track of what kind of playerController this is (Client = The client's playerController, Peer = not client's playerController but another peer on that server, Server = all playerControllers on the server side)
-	public enum PlayerType { Client, Peer, Server }
-
 	// Mouse Info
 	public Transform aimIndicator;
 	Vector3 mousePosClickLeft;
@@ -30,6 +28,10 @@ public class PlayerController : Entity {
 	float aimTime;
 	Vector2 aimVector;
 	Vector2 curveDirection;
+
+	// Tethering Info
+	public Node tetheredNode;
+	public Transform tetherCircle;
 
 	// Prefab Info
 	public GameObject prefab_Projectile;
@@ -46,7 +48,7 @@ public class PlayerController : Entity {
 		eventDie += OnDie;
 		eventRespawn += OnRespawn;
 
-		if (playerType == PlayerType.Client) {
+		if (networkPerspective == NetworkPerspective.Client) {
 			cam = GameObject.Find("[Cameras]").transform.Find("Camera Main").GetComponent<Camera>();
 			mouseCamera = cam.transform.Find("Mouse Camera").GetComponent<Camera>();
 			aimIndicator = GameObject.Find("AimIndicator").transform;
@@ -55,18 +57,20 @@ public class PlayerController : Entity {
 
 	void Update () {
 		if (isDead == false) {
-			switch (playerType) {
-				case (PlayerType.Client): {
+			switch (networkPerspective) {
+				case (NetworkPerspective.Client): {
 						UpdateMovement_Client();
 					} break;
-				case (PlayerType.Peer): {
+				case (NetworkPerspective.Peer): {
 					UpdateMovement_Peer();
 					} break;
-				case (PlayerType.Server): {
+				case (NetworkPerspective.Server): {
 						UpdateMovement_Server();
 					} break;
 			}
 		}
+
+		UpdateTether();
 
 		UpdateAll();
 	}
@@ -78,7 +82,7 @@ public class PlayerController : Entity {
 		}
 		inputMouse = (mouseCamera.ScreenToWorldPoint(Input.mousePosition) + new Vector3(0, 0, 1));
 
-		velocity = Vector3.Lerp(velocity, inputMovement * speed * 20 * Mathf.Abs(Mathf.Clamp(aimTime * 2.75f, 0.0f, 0.9f) - 1), 3f * Time.deltaTime);
+		velocity = Vector3.Lerp(velocity, inputMovement * speed * Mathf.Abs(Mathf.Clamp(aimTime * 2.75f, 0.0f, 0.9f) - 1), 3f * Time.deltaTime);
 
 		transform.position += velocity * Time.deltaTime;
 
@@ -93,8 +97,6 @@ public class PlayerController : Entity {
 			aimTime += Time.deltaTime;
 			aimIndicator.transform.position = ((Vector2)mouseCamera.ScreenToWorldPoint(mousePosClickLeft) + inputMouse) / 2;
 			aimIndicator.localScale = new Vector3(1, Vector2.Distance(mouseCamera.ScreenToWorldPoint(mousePosClickLeft), inputMouse) * 2, 1);
-
-			FireProjectile();
 
 			aimVector = (inputMouse - (Vector2)mouseCamera.ScreenToWorldPoint(mousePosClickLeft)).normalized;
 			aimIndicator.rotation = Quaternion.Euler(0, 0, Mathf.Atan2(aimVector.y, aimVector.x) * Mathf.Rad2Deg + 90);
@@ -111,15 +113,38 @@ public class PlayerController : Entity {
 			aimIndicator.transform.position = Vector3.zero;
 		}
 
+		if (Input.GetKeyDown(KeyCode.Space)) {
+			// Change arrow
+		}
+
 		Vector2 directionLerp = Vector2.Lerp(inputMovement, -aimVector, Mathf.Clamp01(aimTime * 25));
 		playerSprite.rotation = Quaternion.Lerp(playerSprite.rotation, Quaternion.Euler(0, 0, Mathf.Atan2(directionLerp.y, directionLerp.x) * Mathf.Rad2Deg) * Quaternion.Euler(0, 0, 135), 20 * Time.deltaTime);
+	}
+
+	public void SetTether (int nodeEntityId) {
+		if (nodeEntityId >= 0) {
+			if (networkPerspective == NetworkPerspective.Server) {
+				tetheredNode = server.entities[nodeEntityId] as Node;
+				server.Send_PlayerTethered(connectionId, nodeEntityId);
+			} else {
+				tetheredNode = client.entities[nodeEntityId] as Node;
+			}
+		} else {
+			if (networkPerspective == NetworkPerspective.Server) {
+				server.Send_PlayerTethered(connectionId, -1);
+			}
+			tetheredNode = null;
+		}
+
+		// Do anim
 	}
 
 	void FireProjectile () {
 		//GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, transform.position, Quaternion.Euler(0, 0, (Mathf.Atan2(aimVector.y, aimVector.x) * Mathf.Rad2Deg) + 90));
 		//Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
 		//newProjectileClass.velocity = -aimVector * Mathf.Clamp(aimTime, 0.125f, 0.75f) * 15f;
-		client.Send_Projectile(transform.position, -aimVector * Mathf.Clamp(aimTime * 50, 0.125f, 0.75f) * 15f);
+		Vector3 projectileVelocity = -aimVector * Mathf.Clamp(aimTime, 0.125f, 0.75f) * 15f;
+		client.Send_Projectile(transform.position, projectileVelocity, 0f);
 	}
 
 	void UpdateMovement_Peer () {
@@ -138,8 +163,33 @@ public class PlayerController : Entity {
 
 	}
 
+	void UpdateTether () {
+		if (tetheredNode != null) {
+			// Set up Tether Indicator
+			tetherCircle.gameObject.SetActive(true);
+
+			// Make sure tether isn't too long
+			if (networkPerspective == NetworkPerspective.Server) {
+				if (Vector2.Distance(tetheredNode.transform.position, transform.position) > 5) {
+					SetTether(-1);
+				}
+			}
+
+			// Tether Circle
+			tetherCircle.transform.position = tetheredNode.transform.position;
+			tetherCircle.transform.localRotation *= Quaternion.Euler(0, 0, 10 * Time.deltaTime);
+		} else {
+			tetherCircle.gameObject.SetActive(false);
+		}
+	}
+
 	void OnDie () {
 		playerSprite.gameObject.SetActive(false);
+
+		if (networkPerspective == NetworkPerspective.Server) {
+			SetTether(-1);
+			server.DestroyPlayerItems(connectionId);
+		}
 	}
 	
 	void OnRespawn () {

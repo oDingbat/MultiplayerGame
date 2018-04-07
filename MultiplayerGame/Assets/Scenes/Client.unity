@@ -604,7 +604,7 @@ MonoBehaviour:
     type: 2}
   prefab_Projectile: {fileID: 1594072998191632, guid: bc383af025f5f51439874406995e0fff,
     type: 2}
-  entityPrefab_Node: {fileID: 1730077071995592, guid: 168438cb8ba4cae4ebd4e009b96dd54b,
+  entityPrefab_Node: {fileID: 1842916235478100, guid: 168438cb8ba4cae4ebd4e009b96dd54b,
     type: 2}
 --- !u!4 &990766413
 Transform:
@@ -741,7 +741,7 @@ SpriteRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 0
   m_Sprite: {fileID: 21300000, guid: d37db9e8b6d97d740ba3bbdbf2c33bfd, type: 3}
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_Color: {r: 0.5188679, g: 0.5188679, b: 0.5188679, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0
@@ -1040,7 +1040,7 @@ Camera:
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
-  m_BackGroundColor: {r: 1, g: 0.9898459, b: 0.8820755, a: 0}
+  m_BackGroundColor: {r: 1, g: 1, b: 1, a: 0}
   m_NormalizedViewPortRect:
     serializedVersion: 2
     x: 0
