@@ -89,7 +89,7 @@ GameObject:
   - component: {fileID: 4719023413084970}
   - component: {fileID: 212358762175211044}
   m_Layer: 0
-  m_Name: TetherIndicator
+  m_Name: TetherLine
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -290,7 +290,6 @@ MonoBehaviour:
     m_Bits: 2048
   inputMovement: {x: 0, y: 0, z: 0}
   inputMouse: {x: 0, y: 0}
-  velocity: {x: 0, y: 0, z: 0}
   desiredPosition: {x: 0, y: 0, z: 0}
   desiredRotation: 0
   cam: {fileID: 0}
@@ -299,9 +298,8 @@ MonoBehaviour:
   rigidbody: {fileID: 0}
   aimIndicator: {fileID: 0}
   tetheredNode: {fileID: 0}
+  tetherLine: {fileID: 4719023413084970}
   tetherCircle: {fileID: 4008368965531920}
-  prefab_Projectile: {fileID: 1424439762369472, guid: a6047072129b00e47a468f2aa2043a98,
-    type: 2}
 --- !u!212 &212284605143691300
 SpriteRenderer:
   m_ObjectHideFlags: 1

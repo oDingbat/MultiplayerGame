@@ -146,6 +146,8 @@ MonoBehaviour:
     type: 2}
   prefab_Projectile: {fileID: 1594072998191632, guid: bc383af025f5f51439874406995e0fff,
     type: 2}
+  prefab_Wall: {fileID: 1393791348512208, guid: 30f48d413e48ebc4b83a49c31e28e591,
+    type: 2}
 --- !u!4 &24422734
 Transform:
   m_ObjectHideFlags: 0

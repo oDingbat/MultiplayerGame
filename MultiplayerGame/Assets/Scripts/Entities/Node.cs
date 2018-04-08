@@ -13,6 +13,8 @@ public class Node : Entity {
 	public SpriteRenderer spriteRenderer_Skin;
 	public Collider2D collider;
 
+	public List<Wall> walls;
+
 	void Start() {
 		eventTakeDamage += OnTakeDamage;
 		eventDie += OnDie;
@@ -32,27 +34,28 @@ public class Node : Entity {
 
 	void OnTakeHeal(int playerId) {
 		Debug.Log("Healed");
-		if (networkPerspective == NetworkPerspective.Server) {
-			if (server.players[playerId].playerController.tetheredNode != this) {
-				server.players[playerId].playerController.tetheredNode = this;
-				server.players[playerId].playerController.SetTether(entityId);
-			}
-		}
+		
 	}
 
 	void OnDie() {
 		TriggerNodeCaptureChange(-1);
+
+		// Kill all walls attached to this node
+		if (networkPerspective == NetworkPerspective.Server) {
+			foreach (Wall wall in walls) {
+				wall.Die();
+			}
+		}
+
+		walls.Clear();
+
 		Debug.Log("Ded");
 	}
 
 	public void TriggerNodeCaptureChange (int newCapturePlayerId) {
 		// Change color
 		if (newCapturePlayerId < 0) { // If we are not captured
-			if (networkPerspective == NetworkPerspective.Server && capturedPlayerId >= 0) {
-				if (server.players.ContainsKey(capturedPlayerId) == true) {
-					server.players[capturedPlayerId].playerController.SetTether(-1);
-				}
-			}
+
 			capturedColor = ColorHub.HexToColor(ColorHub.Black);
 			capturedPlayerId = newCapturePlayerId;
 		} else {
@@ -60,7 +63,6 @@ public class Node : Entity {
 			if (networkPerspective == NetworkPerspective.Server) {
 				if (server.players.ContainsKey(capturedPlayerId)) {
 					ColorUtility.TryParseHtmlString("#" + server.players[capturedPlayerId].playerColor, out capturedColor);
-					server.players[newCapturePlayerId].playerController.SetTether(entityId);
 				}
 			} else {
 				if (client.players.ContainsKey(capturedPlayerId)) {

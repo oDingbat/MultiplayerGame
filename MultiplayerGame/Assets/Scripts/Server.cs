@@ -34,6 +34,7 @@ public class Server : MonoBehaviour {
 	// Prefabs
 	public GameObject prefab_Player;
 	public GameObject prefab_Projectile;
+	public GameObject prefab_Wall;
 
 	private void InitializeServer() {
 		// Initialize Server
@@ -64,6 +65,7 @@ public class Server : MonoBehaviour {
 	}
 	
 	private void GetInitialEntities () {
+		// Find entities already created in the entities container
 		if (GameObject.Find("[Entities]")) {
 			entitiesContainer = GameObject.Find("[Entities]").transform;
 			foreach (Transform entityTransform in entitiesContainer) {
@@ -85,6 +87,9 @@ public class Server : MonoBehaviour {
 		} else {
 			entitiesContainer = new GameObject("[Entities]").transform;
 		}
+
+		// Create additional entities
+
 	}
 
 		// Update Methods
@@ -149,6 +154,10 @@ public class Server : MonoBehaviour {
 				case "FireProjectile":
 					Receive_FireProjectile(connectionId, splitData);
 					break;
+
+				case "AttemptTether":
+					Receive_AttemptTether(connectionId, splitData);
+					break;
 			}
 		}
 	}
@@ -169,6 +178,7 @@ public class Server : MonoBehaviour {
 		Color newColor = Color.black;
 		ColorUtility.TryParseHtmlString("#" + newPlayer.playerColor, out newColor);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
+		newPlayer.playerController.tetherLine.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.5f);
 		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.5f);
 		newPlayer.playerController.connectionId = connectionId;
 		newPlayer.playerController.server = this;
@@ -192,10 +202,36 @@ public class Server : MonoBehaviour {
 		Send(msg, reliableChannel, connectionId);
 	}
 
-	public void CreateEntity (Entity entity) {
+	public void CreateEntity(Entity entity) {
+		// Set basic entity values
+		entity.entityId = entityIdIterationCurrent;
+		entity.server = this;
+		entity.networkPerspective = NetworkPerspective.Server;
+
 		entities.Add(entityIdIterationCurrent, entity);
-		Send("CreateEntity|" + entityIdIterationCurrent, reliableChannel, players);
 		entityIdIterationCurrent++;
+
+		string newMessage = "CreateEntity|";
+
+		// Get Entity Values
+		int entityId = entity.entityId;
+		string entityTypeName = entity.GetType().ToString();			// TODO: we could send this over as a single byte and then use that to figure out which type it is from an enum?
+		int entityHealth = entity.healthCurrent;
+		Vector2 entityPos = entity.transform.position;					// TODO: we can clamp the length of this to the neares 10th place or seomthing
+		float entityScale = entity.transform.localScale.y;
+		float entityRot = entity.transform.localEulerAngles.z;				// TODO: we can clamp this to the nearest degree
+
+		string entitySpecificInfo = "_";
+
+		if (entity is Node) {
+			entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
+		} else if (entity is Wall) {
+			entitySpecificInfo = "_";
+		}
+
+		// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
+		newMessage += entityId + "|" + entityTypeName + "|" + entityHealth + "|" + entityPos.x + "|" + entityPos.y + "|" + entityScale + "|" + entityRot + "|" + entitySpecificInfo;
+		Send(newMessage, reliableChannel, players);
 	}
 
 	private void OnDisconnection (int connectionId) {
@@ -215,6 +251,21 @@ public class Server : MonoBehaviour {
 				node.Die();
 			}
 		}
+	}
+
+	public void BuildWall (Node nodeA, Node nodeB) {
+		Vector2 nodeMidpoint = (nodeA.transform.position + nodeB.transform.position) / 2;
+		Vector2 nodeABDirection = nodeB.transform.position - nodeA.transform.position;
+
+		GameObject newWall = (GameObject)Instantiate(prefab_Wall, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
+		newWall.transform.localScale = new Vector3(1, Vector2.Distance(nodeA.transform.position, nodeB.transform.position) * 2, 1);
+		Wall newWallObject = newWall.GetComponent<Wall>();
+
+		nodeA.walls.Add(newWallObject);
+		nodeB.walls.Add(newWallObject);
+
+		// Add the new entity to the entities dictionary and tell all clients to add the new entity
+		CreateEntity(newWallObject);
 	}
 
 		// Send Methods
@@ -261,16 +312,27 @@ public class Server : MonoBehaviour {
 		string newMessage = "InitializeEntities|";
 
 		foreach (KeyValuePair<int, Entity> entityAndId in entities) {
-			if ((entityAndId.Value is PlayerController) == false) {		// Don't send player entites
-				int entityId = entityAndId.Key;
+			if ((entityAndId.Value is PlayerController) == false) {     // Don't send player entites
+				
 				Entity entity = entityAndId.Value;
-				string entityTypeName = entityAndId.Value.GetType().ToString();
-				int entityHealth = entityAndId.Value.healthCurrent;
-				string entitySpecificInfo = "null";
+			
+				// Get Entity Values
+				int		entityId = entity.entityId;
+				string	entityTypeName = entity.GetType().ToString();
+				int		entityHealth = entity.healthCurrent;
+				Vector2 entityPos = entity.transform.position;
+				float	entityScale = entity.transform.localScale.y;
+				float	entityRot = entity.transform.localEulerAngles.z;
+				string	entitySpecificInfo = "null";
+
 				if (entity is Node) {
 					entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
+				} else if (entity is Wall) {
+					entitySpecificInfo = "null";
 				}
-				newMessage += entityId + "%" + entityTypeName + "%" + entitySpecificInfo + "%" + entityHealth + "%" + entity.transform.position.x + "%" + entity.transform.position.y + "|";
+
+				// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
+				newMessage += entityId + "%" + entityTypeName + "%" + entityHealth + "%" + entityPos.x + "%" + entityPos.y + "%" + entityScale + "%" + entityRot + "%" + entitySpecificInfo + "|";
 			}
 		}
 
@@ -280,8 +342,8 @@ public class Server : MonoBehaviour {
 	}
 
 	public void Send_PlayerTethered (int connectionId, int nodeEntityId) {
-		string message = "PlayerTethered|" + connectionId + "|" + nodeEntityId;
-		Send(message, reliableChannel, players);
+		string newMessage = "PlayerTethered|" + connectionId + "|" + nodeEntityId;
+		Send(newMessage, reliableChannel, players);
 	}
 
 	public void Entity_Remove (int entityId) {
@@ -361,6 +423,12 @@ public class Server : MonoBehaviour {
 
 				Send("CreateProjectile|" + parentPlayer.connectionId + "|" + origin.x + "|" + origin.y + "|" + velocity.x + "|" + velocity.y + "|" + splitData5, reliableChannel, players);
 			}
+		}
+	}
+
+	private void Receive_AttemptTether(int connectionId, string[] splitData) {
+		if (VerifySplitData(connectionId, splitData, 1)) {
+			players[connectionId].playerController.AttemptTether();
 		}
 	}
 

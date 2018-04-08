@@ -130,16 +130,17 @@ MonoBehaviour:
   entityId: 0
   server: {fileID: 0}
   client: {fileID: 0}
-  healthCurrent: 3
-  healthMax: 3
+  healthCurrent: 1
+  healthMax: 1
   isDead: 0
   networkPerspective: 1
   capturedPlayerId: -1
-  capturedColor: {r: 0, g: 0, b: 0, a: 0}
+  capturedColor: {r: 0.1254902, g: 0.1254902, b: 0.1254902, a: 0}
   spriteRenderer_Body: {fileID: 212825151052326842}
   spriteRenderer_Heart: {fileID: 212337753726089546}
   spriteRenderer_Skin: {fileID: 0}
   collider: {fileID: 0}
+  walls: []
 --- !u!212 &212337753726089546
 SpriteRenderer:
   m_ObjectHideFlags: 1

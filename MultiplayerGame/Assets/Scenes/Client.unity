@@ -606,6 +606,8 @@ MonoBehaviour:
     type: 2}
   entityPrefab_Node: {fileID: 1842916235478100, guid: 168438cb8ba4cae4ebd4e009b96dd54b,
     type: 2}
+  prefab_Wall: {fileID: 1393791348512208, guid: 30f48d413e48ebc4b83a49c31e28e591,
+    type: 2}
 --- !u!4 &990766413
 Transform:
   m_ObjectHideFlags: 0

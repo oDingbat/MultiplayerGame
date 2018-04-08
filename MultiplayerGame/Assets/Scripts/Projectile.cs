@@ -33,7 +33,7 @@ public class Projectile : MonoBehaviour {
 
 			if (hit) {
 				transform.position = hit.point + (velocity.normalized * 0.05f);
-				
+
 				if (hit.transform.GetComponent<Entity>() != null) {
 					Entity hitEntity = hit.transform.GetComponent<Entity>();
 					if (parentEntity == null || parentEntity != hitEntity) {        // Make sure players don't damage themselves

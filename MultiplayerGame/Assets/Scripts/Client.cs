@@ -4,6 +4,7 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
+using System.Linq;
 
 public class Client : MonoBehaviour {
 
@@ -43,7 +44,8 @@ public class Client : MonoBehaviour {
 	public GameObject prefab_Projectile;        // The prefab for regular projectiles
 
 	[Space(10)] [Header("Entity Prefabs")]
-	public GameObject entityPrefab_Node;		// The prefab for Nodes
+	public GameObject entityPrefab_Node;        // The prefab for Nodes
+	public GameObject prefab_Wall;
 
 	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // A dictionary of Players where the int key is that player's clientId
 	public Dictionary<int, Entity> entities = new Dictionary<int, Entity>();
@@ -167,6 +169,10 @@ public class Client : MonoBehaviour {
 					Receive_CreateProjectile(splitData);
 					break;
 
+				case "CreateEntity":
+					Receive_CreateEntity(splitData);
+					break;
+
 				case "EntityTakeDamage":
 					Receive_EntityTakeDamage(splitData);
 					break;
@@ -213,8 +219,8 @@ public class Client : MonoBehaviour {
 		Color colorParse = Color.black;
 		ColorUtility.TryParseHtmlString("#" + playerColor, out colorParse);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = colorParse;
+		newPlayer.playerController.tetherLine.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.5f);
 		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.5f);
-
 
 		// Add player to entities
 		if (entities.ContainsKey(entityId)) {
@@ -250,6 +256,11 @@ public class Client : MonoBehaviour {
 
 	public void Send_Projectile (Vector2 origin, Vector2 velocity, float curve) {
 		string newMessage = "FireProjectile|" + origin.x.ToString() + "|" + origin.y.ToString() + "|" + velocity.x.ToString() + "|" + velocity.y.ToString() + "|" + curve.ToString();
+		Send(newMessage, reliableChannel);
+	}
+
+	public void Send_AttemptTether () {
+		string newMessage = "AttemptTether";
 		Send(newMessage, reliableChannel);
 	}
 
@@ -298,28 +309,66 @@ public class Client : MonoBehaviour {
 	private void Receive_InitializeEntities (string[] splitData) {
 		for (int i = 1; i < splitData.Length; i++) {
 			string[] splitDataBits = splitData[i].Split('%');
-			// Get data bits
-			int entityId = int.Parse(splitDataBits[0]);
-			string entityType = splitDataBits[1];
-			string entitySpecificInfo = splitDataBits[2];
-			int entityHealth = int.Parse(splitDataBits[3]);
-			float posX = float.Parse(splitDataBits[4]);
-			float posY = float.Parse(splitDataBits[5]);
-		
-			if (!entities.ContainsKey(entityId)) {     // Make sure we don't already have this entity created
-				switch (entityType) {
-					case "Node":
-						GameObject newNodeGameObject = (GameObject)Instantiate(entityPrefab_Node, new Vector3(posX, posY), Quaternion.identity);
-						Node newNode = newNodeGameObject.GetComponent<Node>();
-						newNode.client = this;
-						Debug.Log(splitData[i]);
-						newNode.SetHealth(entityHealth);
-						newNode.TriggerNodeCaptureChange(int.Parse(entitySpecificInfo));
-						entities.Add(entityId, newNode);
-						break;
-				}
-			}
+
+			string[] front = new string[] { "Front" };
+
+			splitDataBits = front.Concat(splitDataBits).ToArray();
+
+			Receive_CreateEntity(splitDataBits);
 		}
+	}
+
+	private void Receive_CreateEntity (string[] splitData) {
+		// Entity initialization structure : CreateEntity|EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
+
+		Debug.Log(string.Join("|", splitData));
+
+		// Get data bits
+		int entityId = int.Parse(splitData[1]);
+		string entityType = splitData[2];
+		int entityHealth = int.Parse(splitData[3]);
+		float posX = float.Parse(splitData[4]);
+		float posY = float.Parse(splitData[5]);
+		float scale = float.Parse(splitData[6]);
+		float rot = float.Parse(splitData[7]);
+		Debug.Log(rot);
+		string entitySpecificInfo = splitData[8];
+
+		GameObject newEntityGameObject = null;
+		Entity newEntityObject = null;
+
+		switch (entityType) {
+			case "Node":
+				// Create new entity
+				newEntityGameObject = (GameObject)Instantiate(entityPrefab_Node, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
+				newEntityObject = newEntityGameObject.GetComponent<Node>();
+
+				// Adjust Entity properties
+				newEntityObject.SetHealth(entityHealth);
+				newEntityGameObject.transform.localScale = new Vector3(1, scale, 1);
+
+				// Adjust Entity Type specific properties
+				newEntityObject.client = this;		// TODO: Maybe move this? being done twice vvv
+				(newEntityObject as Node).TriggerNodeCaptureChange(int.Parse(entitySpecificInfo));
+				break;
+			case "Wall":
+				// Create new entity
+				newEntityGameObject = (GameObject)Instantiate(prefab_Wall, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
+				newEntityObject = newEntityGameObject.GetComponent<Wall>();
+
+				// Adjust Entity properties
+				newEntityObject.SetHealth(entityHealth);
+				newEntityGameObject.transform.localScale = new Vector3(1, scale, 1);
+				break;
+		}
+
+		// Set entity values regarless of entity type
+		newEntityObject.client = this;
+		newEntityObject.SetHealth(entityHealth);
+		newEntityObject.entityId = entityId;
+
+		// Add new entity to entity Dictionary
+		entities.Add(entityId, newEntityObject);
 	}
 
 	private void Receive_PlayerPositions (string[] splitData) {
@@ -351,6 +400,7 @@ public class Client : MonoBehaviour {
 	private void Receive_EntityTakeDamage(string[] splitData) {
 		int entityId = int.Parse(splitData[1]);
 		int playerId = int.Parse(splitData[3]);
+		Debug.Log("Damage" + entityId);
 		if (entities.ContainsKey(entityId)) {
 			int damage = int.Parse(splitData[2]);
 			entities[entityId].TakeDamage(damage, playerId);
