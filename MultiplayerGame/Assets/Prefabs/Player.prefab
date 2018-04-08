@@ -54,6 +54,7 @@ GameObject:
   - component: {fileID: 4012274022185180}
   - component: {fileID: 114601294334775630}
   - component: {fileID: 58138675903269850}
+  - component: {fileID: 50509341514705644}
   m_Layer: 8
   m_Name: Player
   m_TagString: Untagged
@@ -198,6 +199,26 @@ MeshRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+--- !u!50 &50509341514705644
+Rigidbody2D:
+  serializedVersion: 4
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1484068117713552}
+  m_BodyType: 0
+  m_Simulated: 1
+  m_UseFullKinematicContacts: 0
+  m_UseAutoMass: 0
+  m_Mass: 100
+  m_LinearDrag: 0
+  m_AngularDrag: 0
+  m_GravityScale: 0
+  m_Material: {fileID: 6200000, guid: 1a31abf4815290c448181e1bd2a1810e, type: 2}
+  m_Interpolate: 1
+  m_SleepingMode: 0
+  m_CollisionDetection: 1
+  m_Constraints: 4
 --- !u!58 &58138675903269850
 CircleCollider2D:
   m_ObjectHideFlags: 1
@@ -206,7 +227,7 @@ CircleCollider2D:
   m_GameObject: {fileID: 1484068117713552}
   m_Enabled: 1
   m_Density: 1
-  m_Material: {fileID: 0}
+  m_Material: {fileID: 6200000, guid: 1a31abf4815290c448181e1bd2a1810e, type: 2}
   m_IsTrigger: 0
   m_UsedByEffector: 0
   m_UsedByComposite: 0
@@ -275,9 +296,9 @@ MonoBehaviour:
   cam: {fileID: 0}
   mouseCamera: {fileID: 0}
   playerSprite: {fileID: 4832953768532078}
+  rigidbody: {fileID: 0}
   aimIndicator: {fileID: 0}
   tetheredNode: {fileID: 0}
-  tetherIndicator: {fileID: 4719023413084970}
   tetherCircle: {fileID: 4008368965531920}
   prefab_Projectile: {fileID: 1424439762369472, guid: a6047072129b00e47a468f2aa2043a98,
     type: 2}

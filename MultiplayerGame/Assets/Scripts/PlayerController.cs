@@ -21,6 +21,8 @@ public class PlayerController : Entity {
 
 	public Transform playerSprite;
 
+	public Rigidbody2D rigidbody;
+
 	// Mouse Info
 	public Transform aimIndicator;
 	Vector3 mousePosClickLeft;
@@ -37,12 +39,15 @@ public class PlayerController : Entity {
 	public GameObject prefab_Projectile;
 
 	void Start() {
+		rigidbody = GetComponent<Rigidbody2D>();
+
 		if (GameObject.Find("[Client]")) {
 			client = GameObject.Find("[Client]").GetComponent<Client>();
 		}
 
 		if (GameObject.Find("[Server]")) {
 			server = GameObject.Find("[Server]").GetComponent<Server>();
+			rigidbody.isKinematic = true;
 		}
 
 		eventDie += OnDie;
@@ -82,9 +87,10 @@ public class PlayerController : Entity {
 		}
 		inputMouse = (mouseCamera.ScreenToWorldPoint(Input.mousePosition) + new Vector3(0, 0, 1));
 
-		velocity = Vector3.Lerp(velocity, inputMovement * speed * Mathf.Abs(Mathf.Clamp(aimTime * 2.75f, 0.0f, 0.9f) - 1), 3f * Time.deltaTime);
+		rigidbody.velocity = Vector3.Lerp(rigidbody.velocity, inputMovement * speed * Mathf.Abs(Mathf.Clamp(aimTime * 2.75f, 0.0f, 0.9f) - 1), 3f * Time.deltaTime);
 
-		transform.position += velocity * Time.deltaTime;
+		//transform.position += velocity * Time.deltaTime;
+		//rigidbody.velocity = Vector2.Lerp(rigidbody.velocity, velocity, 10 * Time.deltaTime);
 
 		cam.transform.position = Vector3.Lerp(cam.transform.position, transform.position + new Vector3(0, 0, -1), 7.5f * Time.deltaTime);
 		
@@ -115,6 +121,10 @@ public class PlayerController : Entity {
 
 		if (Input.GetKeyDown(KeyCode.Space)) {
 			// Change arrow
+		}
+
+		if (Input.GetKey(KeyCode.F)) {
+			Screen.fullScreen = !Screen.fullScreen;
 		}
 
 		Vector2 directionLerp = Vector2.Lerp(inputMovement, -aimVector, Mathf.Clamp01(aimTime * 25));
@@ -149,7 +159,9 @@ public class PlayerController : Entity {
 
 	void UpdateMovement_Peer () {
 		// Code for manipulating the player client side when this player is one of the client's peers
-		transform.position = Vector3.Lerp(transform.position, desiredPosition, 40 * Time.deltaTime);
+		//transform.position = Vector3.Lerp(transform.position, desiredPosition, 40 * Time.deltaTime);
+		Vector2 desiredMovement = (desiredPosition - transform.position);
+		rigidbody.velocity = Vector2.ClampMagnitude(Vector2.Lerp(rigidbody.velocity, desiredMovement * 10, 50 * Time.deltaTime), (desiredMovement / Time.deltaTime).magnitude);
 		playerSprite.transform.rotation = Quaternion.Lerp(playerSprite.transform.rotation, Quaternion.Euler(0, 0, desiredRotation), 75 * Time.deltaTime);
 	}
 

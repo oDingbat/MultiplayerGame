@@ -49,7 +49,7 @@ public class Node : Entity {
 		// Change color
 		if (newCapturePlayerId < 0) { // If we are not captured
 			if (networkPerspective == NetworkPerspective.Server && capturedPlayerId >= 0) {
-				if (server.players[capturedPlayerId] != null) {
+				if (server.players.ContainsKey(capturedPlayerId) == true) {
 					server.players[capturedPlayerId].playerController.SetTether(-1);
 				}
 			}
