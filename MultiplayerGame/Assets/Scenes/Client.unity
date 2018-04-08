@@ -608,6 +608,8 @@ MonoBehaviour:
     type: 2}
   prefab_Wall: {fileID: 1393791348512208, guid: 30f48d413e48ebc4b83a49c31e28e591,
     type: 2}
+  prefab_Gate: {fileID: 1142494549647084, guid: 97492a5b953dae047a3f83cbf85c2128,
+    type: 2}
 --- !u!4 &990766413
 Transform:
   m_ObjectHideFlags: 0

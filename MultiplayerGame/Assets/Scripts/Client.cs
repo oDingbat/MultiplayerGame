@@ -46,6 +46,7 @@ public class Client : MonoBehaviour {
 	[Space(10)] [Header("Entity Prefabs")]
 	public GameObject entityPrefab_Node;        // The prefab for Nodes
 	public GameObject prefab_Wall;
+	public GameObject prefab_Gate;
 
 	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // A dictionary of Players where the int key is that player's clientId
 	public Dictionary<int, Entity> entities = new Dictionary<int, Entity>();
@@ -353,12 +354,19 @@ public class Client : MonoBehaviour {
 				break;
 			case "Wall":
 				// Create new entity
-				newEntityGameObject = (GameObject)Instantiate(prefab_Wall, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
+				if (entitySpecificInfo == "0") {
+					newEntityGameObject = (GameObject)Instantiate(prefab_Wall, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
+				} else if (entitySpecificInfo == "1") {
+					newEntityGameObject = (GameObject)Instantiate(prefab_Gate, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
+				}
 				newEntityObject = newEntityGameObject.GetComponent<Wall>();
-
+				
 				// Adjust Entity properties
 				newEntityObject.SetHealth(entityHealth);
 				newEntityGameObject.transform.localScale = new Vector3(1, scale, 1);
+
+				// Adjust Entity Type specific properties
+				(newEntityObject as Wall).SetTexture();
 				break;
 		}
 

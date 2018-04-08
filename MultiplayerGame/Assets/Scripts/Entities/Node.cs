@@ -13,6 +13,7 @@ public class Node : Entity {
 	public SpriteRenderer spriteRenderer_Skin;
 	public Collider2D collider;
 
+	public List<Node> connectedNodes;
 	public List<Wall> walls;
 
 	void Start() {
@@ -48,6 +49,7 @@ public class Node : Entity {
 		}
 
 		walls.Clear();
+		connectedNodes.Clear();
 
 		Debug.Log("Ded");
 	}

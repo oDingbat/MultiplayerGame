@@ -35,6 +35,7 @@ public class Server : MonoBehaviour {
 	public GameObject prefab_Player;
 	public GameObject prefab_Projectile;
 	public GameObject prefab_Wall;
+	public GameObject prefab_Gate;
 
 	private void InitializeServer() {
 		// Initialize Server
@@ -226,7 +227,7 @@ public class Server : MonoBehaviour {
 		if (entity is Node) {
 			entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
 		} else if (entity is Wall) {
-			entitySpecificInfo = "_";
+			entitySpecificInfo = (entity as Wall).wallType;
 		}
 
 		// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
@@ -254,18 +255,56 @@ public class Server : MonoBehaviour {
 	}
 
 	public void BuildWall (Node nodeA, Node nodeB) {
-		Vector2 nodeMidpoint = (nodeA.transform.position + nodeB.transform.position) / 2;
-		Vector2 nodeABDirection = nodeB.transform.position - nodeA.transform.position;
+		if (nodeA.connectedNodes.Contains(nodeB) == false) {
+			// Find out if this build completes a circuit
+			// Ie: If we go through all of nodeA's connected nodes, do we eventually come to nodeB?
+			
+			Vector2 nodeMidpoint = (nodeA.transform.position + nodeB.transform.position) / 2;
+			Vector2 nodeABDirection = nodeB.transform.position - nodeA.transform.position;
 
-		GameObject newWall = (GameObject)Instantiate(prefab_Wall, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
-		newWall.transform.localScale = new Vector3(1, Vector2.Distance(nodeA.transform.position, nodeB.transform.position) * 2, 1);
-		Wall newWallObject = newWall.GetComponent<Wall>();
+			GameObject newWall = null;
+			Wall newWallObject = null;
 
-		nodeA.walls.Add(newWallObject);
-		nodeB.walls.Add(newWallObject);
+			bool completesCircuit = CheckIfCircuitCompletes(nodeA, nodeB, null);
+			if (completesCircuit == true) {
+				newWall = (GameObject)Instantiate(prefab_Gate, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
+				newWallObject = newWall.GetComponent<Wall>();
+				newWallObject.wallType = "1";
+			} else {
+				newWall = (GameObject)Instantiate(prefab_Wall, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
+				newWallObject = newWall.GetComponent<Wall>();
+				newWallObject.wallType = "0";
+			}
 
-		// Add the new entity to the entities dictionary and tell all clients to add the new entity
-		CreateEntity(newWallObject);
+			nodeA.connectedNodes.Add(nodeB);
+			nodeB.connectedNodes.Add(nodeA);
+
+			newWall.transform.localScale = new Vector3(1, Vector2.Distance(nodeA.transform.position, nodeB.transform.position), 1);
+			
+			newWallObject.SetTexture();
+
+			nodeA.walls.Add(newWallObject);
+			nodeB.walls.Add(newWallObject);
+
+			// Add the new entity to the entities dictionary and tell all clients to add the new entity
+			CreateEntity(newWallObject);
+		}
+	}
+
+	private bool CheckIfCircuitCompletes (Node nodeA, Node nodeB, Node nodeLast) {
+		foreach (Node nodeNext in nodeA.connectedNodes) {
+			if (nodeNext != nodeLast) {
+				if (nodeNext == nodeB) {
+					return true;		// COMPLETES!
+				} else {
+					if (CheckIfCircuitCompletes(nodeNext, nodeB, nodeA)) {		// Stack overflow
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
 	}
 
 		// Send Methods
@@ -328,7 +367,7 @@ public class Server : MonoBehaviour {
 				if (entity is Node) {
 					entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
 				} else if (entity is Wall) {
-					entitySpecificInfo = "null";
+					entitySpecificInfo = (entity as Wall).wallType;
 				}
 
 				// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
