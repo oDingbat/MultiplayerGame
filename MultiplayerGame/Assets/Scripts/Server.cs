@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -17,7 +18,7 @@ public class Server : MonoBehaviour {
 	private int reliableSequencedChannel;		// Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.7";		// The version number currently used by the server
+	private string versionNumber = "0.1.11";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -159,6 +160,10 @@ public class Server : MonoBehaviour {
 				case "AttemptTether":
 					Receive_AttemptTether(connectionId, splitData);
 					break;
+
+				case "AttemptChangeBuildType":
+					Receive_AttemptChangeBuildType(connectionId, splitData);
+					break;
 			}
 		}
 	}
@@ -179,7 +184,6 @@ public class Server : MonoBehaviour {
 		Color newColor = Color.black;
 		ColorUtility.TryParseHtmlString("#" + newPlayer.playerColor, out newColor);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
-		newPlayer.playerController.tetherLine.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.5f);
 		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.5f);
 		newPlayer.playerController.connectionId = connectionId;
 		newPlayer.playerController.server = this;
@@ -227,7 +231,8 @@ public class Server : MonoBehaviour {
 		if (entity is Node) {
 			entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
 		} else if (entity is Wall) {
-			entitySpecificInfo = (entity as Wall).wallType;
+			Wall entityAsWall = (entity as Wall);
+			entitySpecificInfo = entityAsWall.wallType + "%" + entityAsWall.parentNodes[0].entityId + "%" + entityAsWall.parentNodes[1].entityId;
 		}
 
 		// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
@@ -254,8 +259,8 @@ public class Server : MonoBehaviour {
 		}
 	}
 
-	public void BuildWall (Node nodeA, Node nodeB) {
-		if (nodeA.connectedNodes.Contains(nodeB) == false) {
+	public void BuildWall (Node nodeA, Node nodeB, int buildType) {
+		if (nodeA.connections.Any(x => x.node == nodeB) == false) {		// Check if any connections contain nodeB
 			// Find out if this build completes a circuit
 			// Ie: If we go through all of nodeA's connected nodes, do we eventually come to nodeB?
 			
@@ -265,23 +270,39 @@ public class Server : MonoBehaviour {
 			GameObject newWall = null;
 			Wall newWallObject = null;
 
-			bool completesCircuit = CheckIfCircuitCompletes(nodeA, nodeB, null);
-			if (completesCircuit == true) {
+			// Check if this wall completes the circuit
+			
+			if (buildType == 1) {
 				newWall = (GameObject)Instantiate(prefab_Gate, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
 				newWallObject = newWall.GetComponent<Wall>();
 				newWallObject.wallType = "1";
 			} else {
-				newWall = (GameObject)Instantiate(prefab_Wall, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
-				newWallObject = newWall.GetComponent<Wall>();
-				newWallObject.wallType = "0";
+				bool completesCircuit = CheckIfCircuitCompletes(nodeA, nodeB, null);
+				if (completesCircuit == true) {
+					newWall = (GameObject)Instantiate(prefab_Gate, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
+					newWallObject = newWall.GetComponent<Wall>();
+					newWallObject.wallType = "1";
+				} else {
+					newWall = (GameObject)Instantiate(prefab_Wall, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
+					newWallObject = newWall.GetComponent<Wall>();
+					newWallObject.wallType = "0";
+				}
 			}
 
-			nodeA.connectedNodes.Add(nodeB);
-			nodeB.connectedNodes.Add(nodeA);
+			Node.Connection nodeConnectionA = new Node.Connection();
+			nodeConnectionA.node = nodeB;
+			nodeConnectionA.type = int.Parse(newWallObject.wallType);
+			nodeA.connections.Add(nodeConnectionA);
+
+			Node.Connection nodeConnectionB = new Node.Connection();
+			nodeConnectionB.node = nodeA;
+			nodeConnectionB.type = int.Parse(newWallObject.wallType);
+			nodeB.connections.Add(nodeConnectionB);
 
 			newWall.transform.localScale = new Vector3(1, Vector2.Distance(nodeA.transform.position, nodeB.transform.position), 1);
 			
 			newWallObject.SetTexture();
+			newWallObject.parentNodes = new Node[] { nodeA, nodeB };
 
 			nodeA.walls.Add(newWallObject);
 			nodeB.walls.Add(newWallObject);
@@ -291,14 +312,20 @@ public class Server : MonoBehaviour {
 		}
 	}
 
-	private bool CheckIfCircuitCompletes (Node nodeA, Node nodeB, Node nodeLast) {
-		foreach (Node nodeNext in nodeA.connectedNodes) {
-			if (nodeNext != nodeLast) {
-				if (nodeNext == nodeB) {
-					return true;		// COMPLETES!
-				} else {
-					if (CheckIfCircuitCompletes(nodeNext, nodeB, nodeA)) {		// Stack overflow
-						return true;
+	private bool CheckIfCircuitCompletes (Node nodeA, Node nodeB, List<Node> nodesChecked) {
+		foreach (Node.Connection connectionNext in nodeA.connections) {
+			Node nodeNext = connectionNext.node;
+			int typeNext = connectionNext.type;
+			if (typeNext != 1) {		// Make sure this connection is not a gate
+				if (nodesChecked == null || nodesChecked.Contains(nodeNext) == false) {
+					if (nodeNext == nodeB) {
+						return true;        // COMPLETES!
+					} else {
+						List<Node> nodesCheckedPlusNodeA = (nodesChecked == null ? new List<Node>() : nodesChecked);
+						nodesCheckedPlusNodeA.Add(nodeA);
+						if (CheckIfCircuitCompletes(nodeNext, nodeB, nodesCheckedPlusNodeA)) {      // Stack overflow
+							return true;
+						}
 					}
 				}
 			}
@@ -468,6 +495,15 @@ public class Server : MonoBehaviour {
 	private void Receive_AttemptTether(int connectionId, string[] splitData) {
 		if (VerifySplitData(connectionId, splitData, 1)) {
 			players[connectionId].playerController.AttemptTether();
+		}
+	}
+
+	private void Receive_AttemptChangeBuildType(int connectionId, string[] splitData) {
+		if (VerifySplitData(connectionId, splitData, 1)) {
+			players[connectionId].playerController.ChangeBuildType();
+
+			string newMessage = "PlayerChangeBuildType|" + connectionId + "|" + players[connectionId].playerController.buildType;
+			Send(newMessage, reliableChannel, players);
 		}
 	}
 

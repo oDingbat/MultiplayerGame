@@ -21,7 +21,7 @@ public class Client : MonoBehaviour {
 	private int reliableSequencedChannel;       // Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.7";     // The version number currently used by the server
+	private string versionNumber = "0.1.11";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -166,6 +166,10 @@ public class Client : MonoBehaviour {
 					Receive_PlayerPositions(splitData);
 					break;
 
+				case "PlayerChangeBuildType":
+					Receive_PlayerChangeBuildType(splitData);
+					break;
+
 				case "CreateProjectile":
 					Receive_CreateProjectile(splitData);
 					break;
@@ -220,7 +224,6 @@ public class Client : MonoBehaviour {
 		Color colorParse = Color.black;
 		ColorUtility.TryParseHtmlString("#" + playerColor, out colorParse);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = colorParse;
-		newPlayer.playerController.tetherLine.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.5f);
 		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.5f);
 
 		// Add player to entities
@@ -262,6 +265,11 @@ public class Client : MonoBehaviour {
 
 	public void Send_AttemptTether () {
 		string newMessage = "AttemptTether";
+		Send(newMessage, reliableChannel);
+	}
+
+	public void Send_AttemptChangeBuildType () {
+		string newMessage = "AttemptChangeBuildType";
 		Send(newMessage, reliableChannel);
 	}
 
@@ -354,9 +362,10 @@ public class Client : MonoBehaviour {
 				break;
 			case "Wall":
 				// Create new entity
-				if (entitySpecificInfo == "0") {
+				string[] specificInfoSplit = entitySpecificInfo.Split('%');
+				if (specificInfoSplit[0] == "0") {
 					newEntityGameObject = (GameObject)Instantiate(prefab_Wall, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
-				} else if (entitySpecificInfo == "1") {
+				} else if (specificInfoSplit[0] == "1") {
 					newEntityGameObject = (GameObject)Instantiate(prefab_Gate, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
 				}
 				newEntityObject = newEntityGameObject.GetComponent<Wall>();
@@ -366,7 +375,9 @@ public class Client : MonoBehaviour {
 				newEntityGameObject.transform.localScale = new Vector3(1, scale, 1);
 
 				// Adjust Entity Type specific properties
-				(newEntityObject as Wall).SetTexture();
+				Wall newWall = (newEntityObject as Wall);
+				newWall.SetTexture();
+				newWall.parentNodes = new Node[] { entities[int.Parse(specificInfoSplit[1])] as Node, entities[int.Parse(specificInfoSplit[2])] as Node };
 				break;
 		}
 
@@ -389,6 +400,12 @@ public class Client : MonoBehaviour {
 				}
 			}
 		}
+	}
+
+	private void Receive_PlayerChangeBuildType (string[] splitData) {
+		int playerId = int.Parse(splitData[1]);
+		int buildType = int.Parse(splitData[2]);
+		players[playerId].playerController.ChangeBuildType(buildType);
 	}
 
 	private void Receive_CreateProjectile (string[] splitData) {

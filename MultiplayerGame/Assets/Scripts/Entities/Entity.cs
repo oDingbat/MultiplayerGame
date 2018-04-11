@@ -26,16 +26,10 @@ public abstract class Entity : MonoBehaviour {
 		if (eventTakeDamage != null) {
 			eventTakeDamage(playerId);
 		}
-
-		Debug.Log(this + " Take Damage 1");
-
+		
 		if (server != null) {
 			server.Send_EntityTakeDamage(entityId, damage, playerId);
-
-			Debug.Log(this + " Take Damage 2");
-
 			if (healthCurrent == 0) {
-				Debug.Log(this + " Take Damage 3");
 				Die();
 			}
 		}
@@ -43,9 +37,7 @@ public abstract class Entity : MonoBehaviour {
 
 	public void SetHealth (int health) {
 		healthCurrent = health;
-
-		Debug.Log("Healthy");
-
+		
 		if (healthCurrent == 0) {
 			Die();
 		}
@@ -64,7 +56,6 @@ public abstract class Entity : MonoBehaviour {
 
 	public void Die () {
 		if (isDead == false) {
-			Debug.Log(this + " Die");
 			healthCurrent = 0;
 			isDead = true;
 			if (eventDie != null) { eventDie(); }

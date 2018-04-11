@@ -7,7 +7,8 @@ public class Wall : Entity {
 	public Transform texture;
 	Material personalMat;
 
-	public string wallType;		// 0 = wall, 1 = gate
+	public string wallType;     // 0 = wall, 1 = gate
+	public Node[] parentNodes;
 
 	void Start() {
 		eventDie += OnDie;
@@ -20,6 +21,9 @@ public class Wall : Entity {
 	}
 
 	void OnDie() {
+		parentNodes[0].connections.Remove(parentNodes[0].connections.Find(x => x.node == parentNodes[1]));
+		parentNodes[1].connections.Remove(parentNodes[1].connections.Find(x => x.node == parentNodes[0]));
+
 		if (networkPerspective == NetworkPerspective.Server) {
 			server.entities.Remove(entityId);
 		} else {

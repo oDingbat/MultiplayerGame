@@ -159,3 +159,4 @@ MonoBehaviour:
   networkPerspective: 1
   texture: {fileID: 4217338262814380}
   wallType: 
+  parentNodes: []

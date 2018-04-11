@@ -13,14 +13,21 @@ public class Node : Entity {
 	public SpriteRenderer spriteRenderer_Skin;
 	public Collider2D collider;
 
-	public List<Node> connectedNodes;
+	public List<Connection> connections;
 	public List<Wall> walls;
+
+	[System.Serializable]
+	public struct Connection {
+		public int type;        // What type of wall connects these two
+		public Node node;		// The node this connection is with
+	}
 
 	void Start() {
 		eventTakeDamage += OnTakeDamage;
 		eventDie += OnDie;
 		eventTakeHeal += OnTakeHeal;
 		collider = GetComponent<Collider2D>();
+
 		if (networkPerspective == NetworkPerspective.Server) {
 			TriggerNodeCaptureChange(-1);
 		}
@@ -34,7 +41,6 @@ public class Node : Entity {
 	}
 
 	void OnTakeHeal(int playerId) {
-		Debug.Log("Healed");
 		
 	}
 
@@ -49,9 +55,7 @@ public class Node : Entity {
 		}
 
 		walls.Clear();
-		connectedNodes.Clear();
-
-		Debug.Log("Ded");
+		connections.Clear();
 	}
 
 	public void TriggerNodeCaptureChange (int newCapturePlayerId) {

@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using System.Linq;
 
 public class PlayerController : Entity {
 
@@ -37,6 +38,12 @@ public class PlayerController : Entity {
 	public Node tetheredNode;
 	public Transform tetherLine;
 	public Transform tetherCircle;
+	public int buildType;               // Which wall type is the player currently trying to build? 0 = wall, 1 = gate
+	public Material tetherMat;
+	public Transform tetherLineTexture;
+
+	[Space(10)] [Header("Textures")]
+	public Texture[] tetherTextures;
 
 	void Start() {
 		rigidbody = GetComponent<Rigidbody2D>();
@@ -49,6 +56,11 @@ public class PlayerController : Entity {
 			server = GameObject.Find("[Server]").GetComponent<Server>();
 			rigidbody.isKinematic = true;
 		}
+
+		// Set TetherLine material and textureMat
+		tetherMat = new Material(tetherLineTexture.GetComponent<Renderer>().material);
+		tetherLineTexture.GetComponent<Renderer>().material = tetherMat;
+		tetherMat.SetColor("_Color", Color.Lerp(ColorHub.HexToColor(ColorHub.White), playerSprite.GetComponent<SpriteRenderer>().color, 0.5f));
 
 		eventDie += OnDie;
 		eventRespawn += OnRespawn;
@@ -118,6 +130,10 @@ public class PlayerController : Entity {
 			aimIndicator.transform.position = Vector3.zero;
 		}
 
+		if (Input.GetMouseButtonDown(1)) {
+			client.Send_AttemptChangeBuildType();
+		}
+
 		// Handle Arrow mode
 		if (Input.GetKeyDown(KeyCode.Space)) {
 			client.Send_AttemptTether();
@@ -129,6 +145,16 @@ public class PlayerController : Entity {
 
 		Vector2 directionLerp = Vector2.Lerp(inputMovement, -aimVector, Mathf.Clamp01(aimTime * 25));
 		playerSprite.rotation = Quaternion.Lerp(playerSprite.rotation, Quaternion.Euler(0, 0, Mathf.Atan2(directionLerp.y, directionLerp.x) * Mathf.Rad2Deg) * Quaternion.Euler(0, 0, 135), 20 * Time.deltaTime);
+	}
+
+	public void ChangeBuildType () {
+		buildType = (buildType == 0 ? 1 : 0);
+		tetherMat.SetTexture("_MainTex", tetherTextures[buildType]);
+	}
+
+	public void ChangeBuildType(int newBuildType) {
+		buildType = newBuildType;
+		tetherMat.SetTexture("_MainTex", tetherTextures[buildType]);
 	}
 
 	public void AttemptTether() {
@@ -175,6 +201,20 @@ public class PlayerController : Entity {
 		// Do anim
 	}
 
+	public void SetTether(int nodeEntityId, int tetherType) {
+		if (nodeEntityId >= 0) {
+			if (networkPerspective == NetworkPerspective.Server) {
+				tetheredNode = server.entities[nodeEntityId] as Node;
+			} else {
+				tetheredNode = client.entities[nodeEntityId] as Node;
+			}
+		} else {
+			tetheredNode = null;
+		}
+
+		// Do anim
+	}
+
 	void FireProjectile () {
 		Vector3 projectileVelocity = -aimVector * Mathf.Clamp(aimTime, 0.125f, 0.75f) * 15f;        // TODO: This should be calculated server side to avoid hacking
 		client.Send_Projectile(transform.position, projectileVelocity, 0f);
@@ -195,20 +235,44 @@ public class PlayerController : Entity {
 
 	void UpdateBuilding () {
 		if (tetheredNode != null) {
-			RaycastHit2D hit = Physics2D.Raycast(transform.position, tetheredNode.transform.position - transform.position, Mathf.Infinity, nodeMask);
-			if (hit.transform != tetheredNode.transform) {      // If we hit a node that is not the node we are tethered to
-				Node hitNode = hit.transform.gameObject.GetComponent<Node>();
-				if (hitNode != null) {
-					if (hitNode.capturedPlayerId == connectionId) {
-						server.BuildWall(tetheredNode, hitNode);
-					}					
-
+			// Raycast Building
+			Vector2 tetherDirection = tetheredNode.transform.position - transform.position;
+			Debug.DrawRay(transform.position, tetherDirection, Color.red);
+			RaycastHit2D hit = Physics2D.Raycast(transform.position, tetherDirection, Mathf.Infinity, nodeMask);
+			if (hit.transform != null) {      // If we hit a node that is not the node we are tethered to
+				Wall hitGate = hit.transform.GetComponent<Wall>();
+				Debug.Log("Hitting");
+				if (hitGate != null && hitGate.wallType == "1" && !hitGate.parentNodes.Contains(tetheredNode)) {
 					SetTether(-1);
+					return;
+				}
+
+				Node hitNode = hit.transform.gameObject.GetComponent<Node>();
+				if (hitNode != null && hitNode != tetheredNode) {       // Did we hit a node? Is the nodes captureId ourId?
+					if (hitNode.capturedPlayerId == connectionId) {
+						server.BuildWall(tetheredNode, hitNode, buildType);
+					}
+					SetTether(-1);
+					return;
 				}
 			}
+
+
+			Collider2D[] hitNodes = Physics2D.OverlapCircleAll(transform.position, 0.15f, nodeMask);
+			if (hitNodes.Length > 0) {
+				foreach (Collider2D node in hitNodes) {
+					Node nodeObject = node.GetComponent<Node>();
+					if (nodeObject != null && nodeObject != tetheredNode && nodeObject.connections.Any(x => x.node == tetheredNode) == false && nodeObject.capturedPlayerId == connectionId) {
+						server.BuildWall(tetheredNode, nodeObject, buildType);
+						SetTether(-1);
+					}
+				}
+			}
+
+			// Overlap Circle Building
 		}
 	}
-
+	
 	void UpdateAll () {
 
 	}
@@ -223,12 +287,17 @@ public class PlayerController : Entity {
 			if (networkPerspective == NetworkPerspective.Server) {
 				if (Vector2.Distance(tetheredNode.transform.position, transform.position) > 5) {
 					SetTether(-1);
+					return;
 				}
 			}
 
 			// Tether Line
 			tetherLine.transform.position = (tetheredNode.transform.position + transform.position) / 2;
-			tetherLine.localScale = new Vector3(1, Vector2.Distance(tetheredNode.transform.position, transform.position) * 2, 1);
+			float tetherLength = Vector2.Distance(tetheredNode.transform.position, transform.position);
+			tetherLine.localScale = new Vector3(1, tetherLength, 1);
+			
+			tetherMat.SetTextureScale("_MainTex", new Vector2(1, tetherLength));
+
 			Vector2 tetherVector = (transform.position - tetheredNode.transform.position).normalized;
 			tetherLine.rotation = Quaternion.Euler(0, 0, Mathf.Atan2(tetherVector.y, tetherVector.x) * Mathf.Rad2Deg + 90);
 
