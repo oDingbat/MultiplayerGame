@@ -174,7 +174,6 @@ public class PlayerController : Entity {
 			}
 
 			if (closestNodeId == -1 || (tetheredNode != null && closestNodeId == tetheredNode.entityId)) {
-				Debug.Log("derper");
 				SetTether(-1);
 			} else {
 				SetTether(closestNodeId);
@@ -241,7 +240,6 @@ public class PlayerController : Entity {
 			RaycastHit2D hit = Physics2D.Raycast(transform.position, tetherDirection, Mathf.Infinity, nodeMask);
 			if (hit.transform != null) {      // If we hit a node that is not the node we are tethered to
 				Wall hitGate = hit.transform.GetComponent<Wall>();
-				Debug.Log("Hitting");
 				if (hitGate != null && hitGate.wallType == "1" && !hitGate.parentNodes.Contains(tetheredNode)) {
 					SetTether(-1);
 					return;

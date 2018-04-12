@@ -9,6 +9,8 @@ public class Player {
 	public PlayerController		playerController;
 	public string				playerColor;
 	public int					connectionId;
+	public List<CaptureRegion>	captureRegions;
+	public Material				captureRegionMaterial;
 
 	public Player () {
 

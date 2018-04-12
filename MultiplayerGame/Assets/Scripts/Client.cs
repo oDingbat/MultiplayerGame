@@ -21,7 +21,7 @@ public class Client : MonoBehaviour {
 	private int reliableSequencedChannel;       // Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.11";     // The version number currently used by the server
+	private string versionNumber = "0.1.12";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?

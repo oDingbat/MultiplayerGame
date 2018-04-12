@@ -18,7 +18,7 @@ public class Server : MonoBehaviour {
 	private int reliableSequencedChannel;		// Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.11";		// The version number currently used by the server
+	private string versionNumber = "0.1.12";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -29,6 +29,7 @@ public class Server : MonoBehaviour {
 	int entityIdIterationCurrent = 0;
 
 	public List<Node> nodes = new List<Node>();
+	public List<Node> nodesPerimeter = new List<Node>();
 
 	public Transform entitiesContainer;
 
@@ -37,6 +38,10 @@ public class Server : MonoBehaviour {
 	public GameObject prefab_Projectile;
 	public GameObject prefab_Wall;
 	public GameObject prefab_Gate;
+	public GameObject prefab_CaptureRegion;
+
+	// Mats
+	public Material captureRegionMaterialDefault;
 
 	private void InitializeServer() {
 		// Initialize Server
@@ -73,7 +78,6 @@ public class Server : MonoBehaviour {
 			foreach (Transform entityTransform in entitiesContainer) {
 				Entity entity = entityTransform.GetComponent<Entity>();
 				if (entity != null) {
-					Debug.Log("Creating Entity: " + entityIdIterationCurrent);
 					entities.Add(entityIdIterationCurrent, entity);
 					entity.entityId = entityIdIterationCurrent;
 					entity.server = this;
@@ -175,6 +179,7 @@ public class Server : MonoBehaviour {
 		newPlayer.connectionId = connectionId;
 		newPlayer.playerName = "temp";
 		newPlayer.playerColor = ColorHub.GetRandomPlayerColor();
+		newPlayer.captureRegions = new List<CaptureRegion>();
 		players.Add(connectionId, newPlayer);
 		
 		// Spawn the player
@@ -185,6 +190,8 @@ public class Server : MonoBehaviour {
 		ColorUtility.TryParseHtmlString("#" + newPlayer.playerColor, out newColor);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = newColor;
 		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.5f);
+		newPlayer.captureRegionMaterial = new Material(captureRegionMaterialDefault);
+		newPlayer.captureRegionMaterial.color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), newColor, 0.25f);
 		newPlayer.playerController.connectionId = connectionId;
 		newPlayer.playerController.server = this;
 
@@ -277,6 +284,7 @@ public class Server : MonoBehaviour {
 				newWallObject = newWall.GetComponent<Wall>();
 				newWallObject.wallType = "1";
 			} else {
+				nodesPerimeter.Clear();
 				bool completesCircuit = CheckIfCircuitCompletes(nodeA, nodeB, null);
 				if (completesCircuit == true) {
 					newWall = (GameObject)Instantiate(prefab_Gate, nodeMidpoint, Quaternion.Euler(0, 0, Mathf.Atan2(nodeABDirection.y, nodeABDirection.x) * Mathf.Rad2Deg + 90));
@@ -287,6 +295,10 @@ public class Server : MonoBehaviour {
 					newWallObject = newWall.GetComponent<Wall>();
 					newWallObject.wallType = "0";
 				}
+			}
+
+			foreach (Node pNode in nodesPerimeter) {
+				Debug.DrawRay(pNode.transform.position + new Vector3(0, 0.125f, 0), new Vector3(0, -0.25f, 0), Color.red, 1f);
 			}
 
 			Node.Connection nodeConnectionA = new Node.Connection();
@@ -307,18 +319,27 @@ public class Server : MonoBehaviour {
 			nodeA.walls.Add(newWallObject);
 			nodeB.walls.Add(newWallObject);
 
+			// Create Capture Region
+			if (nodesPerimeter.Count > 0) {
+				CreateCaptureRegion(nodesPerimeter, nodeA.capturedPlayerId);
+			}
+
 			// Add the new entity to the entities dictionary and tell all clients to add the new entity
 			CreateEntity(newWallObject);
 		}
 	}
 
 	private bool CheckIfCircuitCompletes (Node nodeA, Node nodeB, List<Node> nodesChecked) {
+
+		nodesPerimeter.Add(nodeA);
+
 		foreach (Node.Connection connectionNext in nodeA.connections) {
 			Node nodeNext = connectionNext.node;
 			int typeNext = connectionNext.type;
 			if (typeNext != 1) {		// Make sure this connection is not a gate
 				if (nodesChecked == null || nodesChecked.Contains(nodeNext) == false) {
 					if (nodeNext == nodeB) {
+						nodesPerimeter.Add(nodeNext);
 						return true;        // COMPLETES!
 					} else {
 						List<Node> nodesCheckedPlusNodeA = (nodesChecked == null ? new List<Node>() : nodesChecked);
@@ -331,8 +352,84 @@ public class Server : MonoBehaviour {
 			}
 		}
 
+		nodesPerimeter.Remove(nodeA);
 		return false;
 	}
+
+	private void CreateCaptureRegion (List<Node> perimeterNodes, int playerId) {
+		// Create Vector2 vertices from perimeter nodes
+		List<Vector2> vertices2D = new List<Vector2>();
+		foreach (Node node in perimeterNodes) {
+			vertices2D.Add(node.transform.position);
+		}
+
+		// Remove any capture regions that this new capture region will encapsulate
+		for (int j = 0; j < players[playerId].captureRegions.Count; j++) {
+			bool doesEcapsulate = true;
+			CaptureRegion captureRegionCurrent = players[playerId].captureRegions[j];
+			for (int c = 0; c < captureRegionCurrent.perimeterPoints.Count; c++) {
+				if (vertices2D.Contains(captureRegionCurrent.perimeterPoints[c]) == false) {       // If vertices does not contain captureRegion perimeter point
+					if (IsPointInPolygon(vertices2D, captureRegionCurrent.perimeterPoints[c]) == false) {
+						doesEcapsulate = false;
+						break;
+					}
+				}
+			}
+
+			if (doesEcapsulate == true) {
+				// Remove captureRegion
+				Debug.Log("Destroy");
+				Destroy(captureRegionCurrent.gameObject);
+				players[playerId].captureRegions.RemoveAt(j);
+				j--;
+			}
+		}
+
+		// Check to see if this new region is redundant (already inside of another region)
+		bool regionRedundant = false;
+
+		if (players[playerId].captureRegions != null) {
+			// Create new CaptureRegion
+			CaptureRegion newCaptureRegion = GameObject.Instantiate(prefab_CaptureRegion, Vector3.zero, Quaternion.identity).GetComponent<CaptureRegion>();
+			players[playerId].captureRegions.Add(newCaptureRegion);
+			newCaptureRegion.perimeterPoints = vertices2D;
+			newCaptureRegion.regionRenderer.material = players[playerId].captureRegionMaterial;
+
+			// Use the triangulator to get indices for creating triangles
+			Triangulator tr = new Triangulator(vertices2D.ToArray());
+			int[] indices = tr.Triangulate();
+
+			// Create the Vector3 vertices							// TODO: can we remove this step?
+			Vector3[] vertices = new Vector3[vertices2D.Count];
+			for (int i = 0; i < vertices.Length; i++) {
+				vertices[i] = new Vector3(vertices2D[i].x, vertices2D[i].y, 0);
+			}
+
+			// Create the mesh
+			Mesh newMesh = new Mesh();
+			newMesh.vertices = vertices;
+			newMesh.triangles = indices;
+			newMesh.RecalculateNormals();
+			newMesh.RecalculateBounds();
+
+			// Apply the new mesh to the new CaptureRegion
+			newCaptureRegion.meshFilter.mesh = newMesh;
+		}
+	}
+
+	private bool IsPointInPolygon (List<Vector2> polygon, Vector2 testPoint) {
+        bool result = false;
+        int j = polygon.Count - 1;
+        for (int i = 0; i < polygon.Count; i++) {
+            if (polygon[i].y < testPoint.y && polygon[j].y >= testPoint.y || polygon[j].y < testPoint.y && polygon[i].y >= testPoint.y) {
+                if (polygon[i].x + (testPoint.y - polygon[i].y) / (polygon[j].y - polygon[i].y) * (polygon[j].x - polygon[i].x) < testPoint.x) {
+                    result = !result;
+                }
+            }
+            j = i;
+        }
+        return result;
+    }
 
 		// Send Methods
 	private void Send_PlayerPosAndRot () {
