@@ -21,7 +21,7 @@ public class Client : MonoBehaviour {
 	private int reliableSequencedChannel;       // Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.12";     // The version number currently used by the server
+	private string versionNumber = "0.1.13";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -340,7 +340,6 @@ public class Client : MonoBehaviour {
 		float posY = float.Parse(splitData[5]);
 		float scale = float.Parse(splitData[6]);
 		float rot = float.Parse(splitData[7]);
-		Debug.Log(rot);
 		string entitySpecificInfo = splitData[8];
 
 		GameObject newEntityGameObject = null;
@@ -362,7 +361,8 @@ public class Client : MonoBehaviour {
 				break;
 			case "Wall":
 				// Create new entity
-				string[] specificInfoSplit = entitySpecificInfo.Split('%');
+				Debug.Log("Entity specific: " + entitySpecificInfo);
+				string[] specificInfoSplit = entitySpecificInfo.Split('$');
 				if (specificInfoSplit[0] == "0") {
 					newEntityGameObject = (GameObject)Instantiate(prefab_Wall, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
 				} else if (specificInfoSplit[0] == "1") {
@@ -377,7 +377,7 @@ public class Client : MonoBehaviour {
 				// Adjust Entity Type specific properties
 				Wall newWall = (newEntityObject as Wall);
 				newWall.SetTexture();
-				newWall.parentNodes = new Node[] { entities[int.Parse(specificInfoSplit[1])] as Node, entities[int.Parse(specificInfoSplit[2])] as Node };
+				newWall.parentNodesEntityIds = new int[] { int.Parse(specificInfoSplit[1]), int.Parse(specificInfoSplit[2]) };
 				break;
 		}
 

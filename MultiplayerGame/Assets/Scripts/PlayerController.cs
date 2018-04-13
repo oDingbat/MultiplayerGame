@@ -240,7 +240,7 @@ public class PlayerController : Entity {
 			RaycastHit2D hit = Physics2D.Raycast(transform.position, tetherDirection, Mathf.Infinity, nodeMask);
 			if (hit.transform != null) {      // If we hit a node that is not the node we are tethered to
 				Wall hitGate = hit.transform.GetComponent<Wall>();
-				if (hitGate != null && hitGate.wallType == "1" && !hitGate.parentNodes.Contains(tetheredNode)) {
+				if (hitGate != null && hitGate.wallType == "1" && (hitGate.parentNodesEntityIds[0] != tetheredNode.entityId && hitGate.parentNodesEntityIds[1] != tetheredNode.entityId)) {
 					SetTether(-1);
 					return;
 				}

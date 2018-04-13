@@ -8,7 +8,7 @@ public class Wall : Entity {
 	Material personalMat;
 
 	public string wallType;     // 0 = wall, 1 = gate
-	public Node[] parentNodes;
+	public int[] parentNodesEntityIds;
 
 	void Start() {
 		eventDie += OnDie;
@@ -21,12 +21,13 @@ public class Wall : Entity {
 	}
 
 	void OnDie() {
-		parentNodes[0].connections.Remove(parentNodes[0].connections.Find(x => x.node == parentNodes[1]));
-		parentNodes[1].connections.Remove(parentNodes[1].connections.Find(x => x.node == parentNodes[0]));
-
 		if (networkPerspective == NetworkPerspective.Server) {
+			(server.entities[parentNodesEntityIds[0]] as Node).connections.Remove((server.entities[parentNodesEntityIds[0]] as Node).connections.Find(x => x.node == (server.entities[parentNodesEntityIds[1]] as Node)));
+			(server.entities[parentNodesEntityIds[1]] as Node).connections.Remove((server.entities[parentNodesEntityIds[1]] as Node).connections.Find(x => x.node == (server.entities[parentNodesEntityIds[0]] as Node)));
 			server.entities.Remove(entityId);
 		} else {
+			(client.entities[parentNodesEntityIds[0]] as Node).connections.Remove((client.entities[parentNodesEntityIds[0]] as Node).connections.Find(x => x.node == (client.entities[parentNodesEntityIds[1]] as Node)));
+			(client.entities[parentNodesEntityIds[1]] as Node).connections.Remove((client.entities[parentNodesEntityIds[1]] as Node).connections.Find(x => x.node == (client.entities[parentNodesEntityIds[0]] as Node)));
 			client.entities.Remove(entityId);
 		}
 		Destroy(this.transform.gameObject);

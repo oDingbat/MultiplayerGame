@@ -16,10 +16,14 @@ public class Node : Entity {
 	public List<Connection> connections;
 	public List<Wall> walls;
 
+	public float tempDistance;
+	public bool isInterior;
+
 	[System.Serializable]
 	public struct Connection {
 		public int type;        // What type of wall connects these two
-		public Node node;		// The node this connection is with
+		public Node node;       // The node this connection is with
+		public Wall wall;		// The wall bridging the connection
 	}
 
 	void Start() {

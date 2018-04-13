@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using UnityEngine;
@@ -18,7 +19,7 @@ public class Server : MonoBehaviour {
 	private int reliableSequencedChannel;		// Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.12";		// The version number currently used by the server
+	private string versionNumber = "0.1.13";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -29,7 +30,13 @@ public class Server : MonoBehaviour {
 	int entityIdIterationCurrent = 0;
 
 	public List<Node> nodes = new List<Node>();
-	public List<Node> nodesPerimeter = new List<Node>();
+	public LayerMask nodeMask;
+
+	// Perimeter Calculation Variables
+	public List<Node> nodesPerimeter = new List<Node>();       // The perimeter nodes
+	public List<Node> nodesBlacklisted = new List<Node>();     // All nodes which are blacklisted from being part of the perimeter (ie: hanging nodes, encapsulated nodes)
+	public List<Node> nodesPossible = new List<Node>();
+	public float largestArea = 0;                              // The largest area currently found
 
 	public Transform entitiesContainer;
 
@@ -45,7 +52,7 @@ public class Server : MonoBehaviour {
 
 	private void InitializeServer() {
 		// Initialize Server
-		Debug.Log("Attempting to initialize server...");
+		UnityEngine.Debug.Log("Attempting to initialize server...");
 
 		NetworkTransport.Init();    // Initialize NetworkTransport
 		ConnectionConfig newConnectionConfig = new ConnectionConfig();
@@ -62,7 +69,7 @@ public class Server : MonoBehaviour {
 		//webHostId = NetworkTransport.AddWebsocketHost(topo, port, null);
 
 		isStarted = true;
-		Debug.Log("Server initialized successfully!");
+		UnityEngine.Debug.Log("Server initialized successfully!");
 	}
 
 	private void Start () {
@@ -101,7 +108,7 @@ public class Server : MonoBehaviour {
 		// Update Methods
 	IEnumerator TickUpdate () {
 		while (true) {
-			//Debug.Log(players.Count);
+			//UnityEngine.Debug.Log(players.Count);
 			UpdateRecieve();
 			UpdateSend();
 			yield return new WaitForSeconds(1 / tickRate);
@@ -125,14 +132,14 @@ public class Server : MonoBehaviour {
 				recData = NetworkTransport.Receive(out recHostId, out connectionId, out channelId, recBuffer, recBuffer.Length, out dataSize, out error);
 				switch (recData) {
 					case NetworkEventType.ConnectEvent:
-						Debug.Log("Player " + connectionId + " has connected");
+						UnityEngine.Debug.Log("Player " + connectionId + " has connected");
 						OnConnection(connectionId);
 						break;
 					case NetworkEventType.DataEvent:
 						ParseData(connectionId, channelId, recBuffer, dataSize);
 						break;
 					case NetworkEventType.DisconnectEvent:
-						Debug.Log("Player " + connectionId + " has disconnected");
+						UnityEngine.Debug.Log("Player " + connectionId + " has disconnected");
 						OnDisconnection(connectionId);
 						break;
 				}
@@ -142,7 +149,7 @@ public class Server : MonoBehaviour {
 
 	private void ParseData (int connectionId, int channelId, byte[] recBuffer, int dataSize) {
 		string data = Encoding.Unicode.GetString(recBuffer, 0, dataSize);
-		//Debug.Log("Recieving from " + connectionId + " : " + data);
+		//UnityEngine.Debug.Log("Recieving from " + connectionId + " : " + data);
 
 		string[] splitData = data.Split('|');
 
@@ -239,11 +246,14 @@ public class Server : MonoBehaviour {
 			entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
 		} else if (entity is Wall) {
 			Wall entityAsWall = (entity as Wall);
-			entitySpecificInfo = entityAsWall.wallType + "%" + entityAsWall.parentNodes[0].entityId + "%" + entityAsWall.parentNodes[1].entityId;
+			entitySpecificInfo = entityAsWall.wallType + "$" + entityAsWall.parentNodesEntityIds[0] + "$" + entityAsWall.parentNodesEntityIds[1];
 		}
 
 		// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
 		newMessage += entityId + "|" + entityTypeName + "|" + entityHealth + "|" + entityPos.x + "|" + entityPos.y + "|" + entityScale + "|" + entityRot + "|" + entitySpecificInfo;
+
+		UnityEngine.Debug.Log(newMessage);
+
 		Send(newMessage, reliableChannel, players);
 	}
 
@@ -297,41 +307,53 @@ public class Server : MonoBehaviour {
 				}
 			}
 
-			foreach (Node pNode in nodesPerimeter) {
-				Debug.DrawRay(pNode.transform.position + new Vector3(0, 0.125f, 0), new Vector3(0, -0.25f, 0), Color.red, 1f);
+			// Create Capture Region
+			Stopwatch newStopwatch = new Stopwatch();
+
+			newStopwatch.Start();
+			if (nodeB.connections.Count > 0) {
+				FindPerimeter(nodeA, nodeB);
+			}
+			newStopwatch.Stop();
+			UnityEngine.Debug.Log("ElapsedTime - FindPerimeter: " + newStopwatch.ElapsedMilliseconds+ " milliseconds");
+
+			if (nodesPerimeter.Count > 2) {
+				CreateCaptureRegion(nodesPerimeter, nodeA.capturedPlayerId);
 			}
 
 			Node.Connection nodeConnectionA = new Node.Connection();
 			nodeConnectionA.node = nodeB;
 			nodeConnectionA.type = int.Parse(newWallObject.wallType);
+			nodeConnectionA.wall = newWallObject;
 			nodeA.connections.Add(nodeConnectionA);
 
 			Node.Connection nodeConnectionB = new Node.Connection();
 			nodeConnectionB.node = nodeA;
 			nodeConnectionB.type = int.Parse(newWallObject.wallType);
+			nodeConnectionB.wall = newWallObject;
 			nodeB.connections.Add(nodeConnectionB);
 
 			newWall.transform.localScale = new Vector3(1, Vector2.Distance(nodeA.transform.position, nodeB.transform.position), 1);
 			
 			newWallObject.SetTexture();
-			newWallObject.parentNodes = new Node[] { nodeA, nodeB };
+			newWallObject.parentNodesEntityIds = new int[] { nodeA.entityId, nodeB.entityId };
 
 			nodeA.walls.Add(newWallObject);
 			nodeB.walls.Add(newWallObject);
 
-			// Create Capture Region
-			if (nodesPerimeter.Count > 0) {
-				CreateCaptureRegion(nodesPerimeter, nodeA.capturedPlayerId);
-			}
-
+			
 			// Add the new entity to the entities dictionary and tell all clients to add the new entity
 			CreateEntity(newWallObject);
 		}
 	}
 
+	public void DestroyWall (Wall wall) {
+
+	}
+
 	private bool CheckIfCircuitCompletes (Node nodeA, Node nodeB, List<Node> nodesChecked) {
 
-		nodesPerimeter.Add(nodeA);
+		//nodesPerimeter.Add(nodeA);
 
 		foreach (Node.Connection connectionNext in nodeA.connections) {
 			Node nodeNext = connectionNext.node;
@@ -339,12 +361,12 @@ public class Server : MonoBehaviour {
 			if (typeNext != 1) {		// Make sure this connection is not a gate
 				if (nodesChecked == null || nodesChecked.Contains(nodeNext) == false) {
 					if (nodeNext == nodeB) {
-						nodesPerimeter.Add(nodeNext);
+						//nodesPerimeter.Add(nodeNext);
 						return true;        // COMPLETES!
 					} else {
 						List<Node> nodesCheckedPlusNodeA = (nodesChecked == null ? new List<Node>() : nodesChecked);
 						nodesCheckedPlusNodeA.Add(nodeA);
-						if (CheckIfCircuitCompletes(nodeNext, nodeB, nodesCheckedPlusNodeA)) {      // Stack overflow
+						if (CheckIfCircuitCompletes(nodeNext, nodeB, nodesCheckedPlusNodeA)) {      // Stack overflow // TODO: simply this and next line
 							return true;
 						}
 					}
@@ -352,8 +374,103 @@ public class Server : MonoBehaviour {
 			}
 		}
 
-		nodesPerimeter.Remove(nodeA);
+		//nodesPerimeter.Remove(nodeA);
 		return false;
+	}
+	
+	private void FindPerimeter (Node nodeA, Node nodeB) {
+		nodesPerimeter = new List<Node>();
+		nodesBlacklisted = new List<Node>();
+		nodesPossible = new List<Node>();
+		largestArea = 0;
+		
+		FindPerimeter_A(nodeA, nodeB, new List<Node>());
+	}
+
+	private void FindPerimeter_A (Node nodeA, Node nodeB, List<Node> newNodesPerimeter) {
+		newNodesPerimeter.Add(nodeA);
+
+		List<Node> sortedNodes = new List<Node>();		// List of connectedNodes which are later sorted from greatest to least distance from nodeB
+
+		foreach (Node.Connection connectionCurrent in nodeA.connections) {
+			Node nodeNext = connectionCurrent.node;
+			if (nodeNext == nodeB) {        // Success!
+				List<Node> finalNodesPerimeter = new List<Node> (newNodesPerimeter);
+				finalNodesPerimeter.Add(nodeB);
+
+				string orderHelper = "(";
+				for (int i = 0; i < finalNodesPerimeter.Count; i++) {
+					orderHelper += finalNodesPerimeter[i].entityId + " ";
+				}
+				orderHelper += ")";
+
+				//UnityEngine.Debug.Log("Success " + finalNodesPerimeter.Count + " " + orderHelper);
+				TestPerimeter(finalNodesPerimeter);
+			} else {                        // Fail! Test nodeNext's connections
+				if (nodeNext.isInterior == false && newNodesPerimeter.Contains(nodeNext) == false && nodesBlacklisted.Contains(nodeNext) == false) {        // Don't path over somewhere we've been already (anti-stackoverflow)
+					float nodeNextDistance = Vector2.Distance(nodeNext.transform.position, nodeB.transform.position);
+					nodeNext.tempDistance = nodeNextDistance;
+					sortedNodes.Add(nodeNext);
+					if (nodesPossible.Contains(nodeNext) == false) {
+						nodesPossible.Add(nodeNext);
+					}
+				}
+			}
+		}
+
+		// Sort the nodes
+		sortedNodes = sortedNodes.OrderByDescending(o => o.tempDistance).ToList();
+
+		// Go through each sorted node
+		for (int i = 0; i < sortedNodes.Count; i++) {      // TODO: foreach cleaner?
+			Node nodeSorted = sortedNodes[i];
+			if (nodesBlacklisted.Contains(nodeSorted) == false) {       // Make sure this node isn't blacklisted
+				FindPerimeter_A(nodeSorted, nodeB, new List<Node>(newNodesPerimeter));
+			}
+		}
+	}
+
+	private void TestPerimeter (List<Node> perimeterNodes) {
+		float newArea = GetArea(perimeterNodes);
+		if (newArea > largestArea) {
+			// Success
+			largestArea = newArea;
+			nodesPerimeter = perimeterNodes;
+
+			// Take all possibleNodes that are inside of this polygon and blacklist them
+			for (int i = 0; i < nodesPossible.Count; i++) {
+				Node nodePossible = nodesPossible[i];
+				if (perimeterNodes.Contains(nodePossible) == false && IsPointInPolygon(perimeterNodes, nodePossible.transform.position)) {
+					nodesBlacklisted.Add(nodePossible);
+					nodesPossible.Remove(nodePossible);
+					UnityEngine.Debug.Log("BLACKLIST THAT BITCH!");
+					i--;
+				}
+			}
+
+		}
+	}
+
+	private float GetArea(List<Node> nodes) {
+		int n = nodes.Count;
+		float A = 0.0f;
+		for (int p = n - 1, q = 0; q < n; p = q++) {
+			Vector2 pval = nodes[p].transform.position;
+			Vector2 qval = nodes[q].transform.position;
+			A += pval.x * qval.y - qval.x * pval.y;
+		}
+		return Mathf.Abs(A * 0.5f);
+	}
+
+	private float GetArea(List<Vector2> points) {
+		int n = points.Count;
+		float A = 0.0f;
+		for (int p = n - 1, q = 0; q < n; p = q++) {
+			Vector2 pval = points[p];
+			Vector2 qval = points[q];
+			A += pval.x * qval.y - qval.x * pval.y;
+		}
+		return Mathf.Abs(A * 0.5f);
 	}
 
 	private void CreateCaptureRegion (List<Node> perimeterNodes, int playerId) {
@@ -364,31 +481,50 @@ public class Server : MonoBehaviour {
 		}
 
 		// Remove any capture regions that this new capture region will encapsulate
-		for (int j = 0; j < players[playerId].captureRegions.Count; j++) {
-			bool doesEcapsulate = true;
+		for (int j = 0; j < players[playerId].captureRegions.Count; j++) {				// Check every capture region the player has
+			bool doesEncapsulate = true;
 			CaptureRegion captureRegionCurrent = players[playerId].captureRegions[j];
 			for (int c = 0; c < captureRegionCurrent.perimeterPoints.Count; c++) {
-				if (vertices2D.Contains(captureRegionCurrent.perimeterPoints[c]) == false) {       // If vertices does not contain captureRegion perimeter point
-					if (IsPointInPolygon(vertices2D, captureRegionCurrent.perimeterPoints[c]) == false) {
-						doesEcapsulate = false;
-						break;
-					}
+				if ((vertices2D.Contains(captureRegionCurrent.perimeterPoints[c]) == false && IsPointInPolygon(vertices2D, captureRegionCurrent.perimeterPoints[c]) == false) || GetArea(perimeterNodes) < GetArea(captureRegionCurrent.perimeterPoints)) {
+					doesEncapsulate = false;
+					break;
 				}
 			}
 
-			if (doesEcapsulate == true) {
+			if (doesEncapsulate == true) {
 				// Remove captureRegion
-				Debug.Log("Destroy");
+				//UnityEngine.Debug.Log("Destroy Old Capture Region (" + GetArea(perimeterNodes) + ") - (" + GetArea(captureRegionCurrent.perimeterPoints) + ")");
 				Destroy(captureRegionCurrent.gameObject);
 				players[playerId].captureRegions.RemoveAt(j);
 				j--;
 			}
 		}
 
+		
 		// Check to see if this new region is redundant (already inside of another region)
-		bool regionRedundant = false;
+		bool newRegionRedundant = false;
+		for (int j = 0; j < players[playerId].captureRegions.Count; j++) {              // Check every capture region the player has
+			CaptureRegion captureRegionCurrent = players[playerId].captureRegions[j];
+			bool currentRegionEncapsulates = true;
+			
+			// Check each captureRegion created by the player to see if it encapsulates the new captureRegion
+			for (int c = 0; c < vertices2D.Count; c++) {
+				if (captureRegionCurrent.perimeterPoints.Contains(vertices2D[c]) == false) {       // If the currentCaptureRegion doesn't contain a vertice
+					if (IsPointInPolygon(captureRegionCurrent.perimeterPoints, vertices2D[c]) == false) {
+						currentRegionEncapsulates = false;
+						break;
+					}
+				}
+			}
 
-		if (players[playerId].captureRegions != null) {
+			if (currentRegionEncapsulates == true) {
+				UnityEngine.Debug.Log("Cancel New Capture Region");
+				newRegionRedundant = true;
+				break;
+			}
+		}
+
+		if (players[playerId].captureRegions != null && newRegionRedundant == false) {
 			// Create new CaptureRegion
 			CaptureRegion newCaptureRegion = GameObject.Instantiate(prefab_CaptureRegion, Vector3.zero, Quaternion.identity).GetComponent<CaptureRegion>();
 			players[playerId].captureRegions.Add(newCaptureRegion);
@@ -414,6 +550,26 @@ public class Server : MonoBehaviour {
 
 			// Apply the new mesh to the new CaptureRegion
 			newCaptureRegion.meshFilter.mesh = newMesh;
+			newCaptureRegion.InitializePolygonCollider();
+
+			// Set all Nodes within the newCaptureRegion to interior unless they are part of the perimeter
+			ContactFilter2D newContactFilter = new ContactFilter2D();
+			newContactFilter.layerMask = nodeMask;
+			newContactFilter.useLayerMask = true;
+			Collider2D[] hitNodes = new Collider2D[9999];							// TODO: holy garbage batman
+			Physics2D.OverlapCollider(newCaptureRegion.polygonCollider, newContactFilter, hitNodes);
+
+			UnityEngine.Debug.Log(hitNodes.Length);
+
+			hitNodes = hitNodes.Where(n => n != null).ToArray();
+
+			foreach (Collider2D col in hitNodes) {
+				Node colNode = col.transform.GetComponent<Node>();
+				if (colNode != null && perimeterNodes.Contains(colNode) == false) {
+					UnityEngine.Debug.Log("Yuppers!");
+					colNode.isInterior = true;
+				}
+			}
 		}
 	}
 
@@ -431,7 +587,21 @@ public class Server : MonoBehaviour {
         return result;
     }
 
-		// Send Methods
+	private bool IsPointInPolygon(List<Node> polygon, Vector2 testPoint) {
+		bool result = false;
+		int j = polygon.Count - 1;
+		for (int i = 0; i < polygon.Count; i++) {
+			if (polygon[i].transform.position.y < testPoint.y && polygon[j].transform.position.y >= testPoint.y || polygon[j].transform.position.y < testPoint.y && polygon[i].transform.position.y >= testPoint.y) {
+				if (polygon[i].transform.position.x + (testPoint.y - polygon[i].transform.position.y) / (polygon[j].transform.position.y - polygon[i].transform.position.y) * (polygon[j].transform.position.x - polygon[i].transform.position.x) < testPoint.x) {
+					result = !result;
+				}
+			}
+			j = i;
+		}
+		return result;
+	}
+
+	// Send Methods
 	private void Send_PlayerPosAndRot () {
 		string message = "PlayerPositions|";
 
@@ -491,7 +661,8 @@ public class Server : MonoBehaviour {
 				if (entity is Node) {
 					entitySpecificInfo = (entity as Node).capturedPlayerId.ToString();
 				} else if (entity is Wall) {
-					entitySpecificInfo = (entity as Wall).wallType;
+					Wall entityAsWall = (entity as Wall);
+					entitySpecificInfo = entityAsWall.wallType + "$" + entityAsWall.parentNodesEntityIds[0] + "$" + entityAsWall.parentNodesEntityIds[1];
 				}
 
 				// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
