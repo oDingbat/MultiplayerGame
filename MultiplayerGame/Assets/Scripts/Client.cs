@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
 using System.Linq;
+using System;
 
 public class Client : MonoBehaviour {
 
@@ -12,7 +13,7 @@ public class Client : MonoBehaviour {
 	private const int MAX_CONNECTION = 100;     // The max number of players allowed on the server
 	public string ipAddressServer = "";
 	private int port = 3333;                    // The port number
-	private int ourClientId;                    // The Id of our client (Used to manipulate the Players but avoid manipulating our own player incorrectly) (Not same as connectionId)
+	public int ourClientId;                    // The Id of our client (Used to manipulate the Players but avoid manipulating our own player incorrectly) (Not same as connectionId)
 	private int hostId;                         // The Id of our host
 	private int connectionId;                   // The Id of our connection
 	private int reliableChannel;                // Channel for sending reliable information
@@ -21,7 +22,7 @@ public class Client : MonoBehaviour {
 	private int reliableSequencedChannel;       // Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is sent and recieved to and from the server
-	private string versionNumber = "0.1.13";     // The version number currently used by the server
+	private string versionNumber = "0.1.14";     // The version number currently used by the server
 
 	// Connection booleans
 	private bool isConnected = false;           // Are we currently connected to the Server?
@@ -30,6 +31,7 @@ public class Client : MonoBehaviour {
 
 	[Space(10)] [Header("Player Variables")]
 	public string playerName;                   // The name of our player
+	public Dictionary<int, CaptureRegion> captureRegions = new Dictionary<int, CaptureRegion>();	// All capture regions in the game
 
 	[Space(10)] [Header("UI")]
 	public InputField inputField_PlayerName;    // Input field for typing the player's desired name
@@ -47,6 +49,9 @@ public class Client : MonoBehaviour {
 	public GameObject entityPrefab_Node;        // The prefab for Nodes
 	public GameObject prefab_Wall;
 	public GameObject prefab_Gate;
+	public GameObject prefab_CaptureRegion;
+
+	public Material captureRegionMaterialDefault;
 
 	public Dictionary<int, Player> players = new Dictionary<int, Player>();         // A dictionary of Players where the int key is that player's clientId
 	public Dictionary<int, Entity> entities = new Dictionary<int, Entity>();
@@ -150,6 +155,10 @@ public class Client : MonoBehaviour {
 					Receive_InitializeEntities(splitData);
 					break;
 
+				case "InitializeCaptureRegions":
+					Receive_InitializeCaptureRegions(splitData);
+					break;
+
 				case "WrongVersion":
 					Receive_WrongVersion();
 					break;
@@ -198,6 +207,14 @@ public class Client : MonoBehaviour {
 					Receive_EntityRemove(splitData);
 					break;
 
+				case "CreateCaptureRegion":
+					Receive_CreateCaptureRegion(splitData);
+					break;
+
+				case "DestroyCaptureRegion":
+					Receive_DestroyCaptureRegion(splitData);
+					break;
+
 				case "NodeCaptureChange":
 					Receive_NodeCaptureChange(splitData);
 					break;
@@ -223,6 +240,8 @@ public class Client : MonoBehaviour {
 		newPlayer.playerColor = playerColor;
 		Color colorParse = Color.black;
 		ColorUtility.TryParseHtmlString("#" + playerColor, out colorParse);
+		newPlayer.captureRegionMaterial = new Material(captureRegionMaterialDefault);
+		newPlayer.captureRegionMaterial.color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.25f);
 		newPlayer.playerController.playerSprite.GetComponent<SpriteRenderer>().color = colorParse;
 		newPlayer.playerController.tetherCircle.GetComponent<SpriteRenderer>().color = Color.Lerp(ColorHub.HexToColor(ColorHub.White), colorParse, 0.5f);
 
@@ -270,6 +289,12 @@ public class Client : MonoBehaviour {
 
 	public void Send_AttemptChangeBuildType () {
 		string newMessage = "AttemptChangeBuildType";
+		Send(newMessage, reliableChannel);
+	}
+
+	public void Send_AttemptBuildNode (int nodeEntityId) {
+		Debug.Log("ATTEMPT BUILD");
+		string newMessage = "AttemptBuildNode|" + nodeEntityId;
 		Send(newMessage, reliableChannel);
 	}
 
@@ -327,11 +352,8 @@ public class Client : MonoBehaviour {
 		}
 	}
 
-	private void Receive_CreateEntity (string[] splitData) {
+	private void Receive_CreateEntity(string[] splitData) {
 		// Entity initialization structure : CreateEntity|EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
-
-		Debug.Log(string.Join("|", splitData));
-
 		// Get data bits
 		int entityId = int.Parse(splitData[1]);
 		string entityType = splitData[2];
@@ -356,7 +378,7 @@ public class Client : MonoBehaviour {
 				newEntityGameObject.transform.localScale = new Vector3(1, scale, 1);
 
 				// Adjust Entity Type specific properties
-				newEntityObject.client = this;		// TODO: Maybe move this? being done twice vvv
+				newEntityObject.client = this;      // TODO: Maybe move this? being done twice vvv
 				(newEntityObject as Node).TriggerNodeCaptureChange(int.Parse(entitySpecificInfo));
 				break;
 			case "Wall":
@@ -369,7 +391,7 @@ public class Client : MonoBehaviour {
 					newEntityGameObject = (GameObject)Instantiate(prefab_Gate, new Vector3(posX, posY), Quaternion.Euler(0, 0, rot));
 				}
 				newEntityObject = newEntityGameObject.GetComponent<Wall>();
-				
+
 				// Adjust Entity properties
 				newEntityObject.SetHealth(entityHealth);
 				newEntityGameObject.transform.localScale = new Vector3(1, scale, 1);
@@ -388,6 +410,67 @@ public class Client : MonoBehaviour {
 
 		// Add new entity to entity Dictionary
 		entities.Add(entityId, newEntityObject);
+	}
+
+	private void Receive_InitializeCaptureRegions(string[] splitData) {
+		for (int i = 1; i < splitData.Length; i++) {
+			string[] splitDataBits = splitData[i].Split('%');
+
+			string[] front = new string[] { "Front" };
+
+			splitDataBits = front.Concat(splitDataBits).ToArray();
+
+			Receive_CreateCaptureRegion(splitDataBits);
+		}
+	}
+
+	private void Receive_CreateCaptureRegion(string[] splitData) {
+		// Capture Region initialization structure : CreateCaptureRegion|CaptureRegionId|playerId|arrayOfNodeEntityIds{0,1,2...}
+
+		Debug.Log(string.Join("|", splitData));
+
+		// Get data bits
+		int captureRegionId = int.Parse(splitData[1]);
+		int playerId = int.Parse(splitData[2]);
+		int[] nodeEntityIds = Array.ConvertAll(splitData[3].Split('$'), s => int.Parse(s));
+		
+		List<Vector2> vertices2D = new List<Vector2>();
+
+		foreach (int nodeEntityId in nodeEntityIds) {
+			vertices2D.Add(entities[nodeEntityId].transform.position);
+		}
+
+		CaptureRegion newCaptureRegion = GameObject.Instantiate(prefab_CaptureRegion, Vector3.zero, Quaternion.identity).GetComponent<CaptureRegion>();
+		newCaptureRegion.regionRenderer.material = players[playerId].captureRegionMaterial;
+		captureRegions.Add(captureRegionId, newCaptureRegion);
+
+		// Use the triangulator to get indices for creating triangles
+		Triangulator tr = new Triangulator(vertices2D.ToArray());
+		int[] indices = tr.Triangulate();
+
+		// Create the Vector3 vertices							// TODO: can we remove this step?
+		Vector3[] vertices = new Vector3[vertices2D.Count];
+		for (int i = 0; i < vertices.Length; i++) {
+			vertices[i] = new Vector3(vertices2D[i].x, vertices2D[i].y, 0);
+		}
+
+		// Create the mesh
+		Mesh newMesh = new Mesh();
+		newMesh.vertices = vertices;
+		newMesh.triangles = indices;
+		newMesh.RecalculateNormals();
+		newMesh.RecalculateBounds();
+
+		// Apply the new mesh to the new CaptureRegion
+		newCaptureRegion.meshFilter.mesh = newMesh;
+	}
+
+	private void Receive_DestroyCaptureRegion (string[] splitData) {
+		int captureRegionId = int.Parse(splitData[1]);
+		if (captureRegions.ContainsKey(captureRegionId) == true) {
+			Destroy(captureRegions[captureRegionId].gameObject);
+			captureRegions.Remove(captureRegionId);
+		}
 	}
 
 	private void Receive_PlayerPositions (string[] splitData) {

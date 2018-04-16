@@ -610,6 +610,10 @@ MonoBehaviour:
     type: 2}
   prefab_Gate: {fileID: 1142494549647084, guid: 97492a5b953dae047a3f83cbf85c2128,
     type: 2}
+  prefab_CaptureRegion: {fileID: 1935092612074974, guid: 1658aeee8b5afe341ac494083abba0b6,
+    type: 2}
+  captureRegionMaterialDefault: {fileID: 2100000, guid: bb92d62beed5a834b915e0459d8ccb84,
+    type: 2}
 --- !u!4 &990766413
 Transform:
   m_ObjectHideFlags: 0

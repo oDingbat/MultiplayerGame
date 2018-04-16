@@ -19,7 +19,7 @@ public class Server : MonoBehaviour {
 	private int reliableSequencedChannel;		// Channel for sending sequenced reliable information
 	private byte error;                         // Byte used to save errors returned by NetworkTransport.Receive
 	private float tickRate = 64;                // The rate at which information is recieved and sent to and from the clients
-	private string versionNumber = "0.1.13";		// The version number currently used by the server
+	private string versionNumber = "0.1.14";		// The version number currently used by the server
 
 	// Connection booleans
 	private bool isStarted = false;
@@ -31,12 +31,17 @@ public class Server : MonoBehaviour {
 
 	public List<Node> nodes = new List<Node>();
 	public LayerMask nodeMask;
+	public LayerMask captureRegionMask;
 
 	// Perimeter Calculation Variables
 	public List<Node> nodesPerimeter = new List<Node>();       // The perimeter nodes
-	public List<Node> nodesBlacklisted = new List<Node>();     // All nodes which are blacklisted from being part of the perimeter (ie: hanging nodes, encapsulated nodes)
-	public List<Node> nodesPossible = new List<Node>();
+	public List<Node> nodesAvailable = new List<Node>();
+	public List<Node> nodesInitial = new List<Node>();
+	public List<Node> nodesBlacklisted = new List<Node>();
+	public List<Node> perimeterNodesLeftmost = new List<Node>();
+	public List<Node> perimeterNodesRightmost = new List<Node>();
 	public float largestArea = 0;                              // The largest area currently found
+	int captureRegionIdIterationCurrent = 0;
 
 	public Transform entitiesContainer;
 
@@ -175,6 +180,10 @@ public class Server : MonoBehaviour {
 				case "AttemptChangeBuildType":
 					Receive_AttemptChangeBuildType(connectionId, splitData);
 					break;
+
+				case "AttemptBuildNode":
+					//Receive_AttemptBuildNode(connectionId, splitData);
+					break;
 			}
 		}
 	}
@@ -251,9 +260,7 @@ public class Server : MonoBehaviour {
 
 		// Entity initialization structure : EntityId|EntityTypeName|EntityHealth|EntityPosX|EntityPosY|EntityScale|EntityRot|EntitySpecificInfo
 		newMessage += entityId + "|" + entityTypeName + "|" + entityHealth + "|" + entityPos.x + "|" + entityPos.y + "|" + entityScale + "|" + entityRot + "|" + entitySpecificInfo;
-
-		UnityEngine.Debug.Log(newMessage);
-
+		
 		Send(newMessage, reliableChannel, players);
 	}
 
@@ -274,6 +281,11 @@ public class Server : MonoBehaviour {
 				node.Die();
 			}
 		}
+
+		foreach (CaptureRegion capRegion in players[connectionId].captureRegions) {
+			Destroy(capRegion.transform.gameObject);
+		}
+		players[connectionId].captureRegions = new List<CaptureRegion>();
 	}
 
 	public void BuildWall (Node nodeA, Node nodeB, int buildType) {
@@ -311,8 +323,9 @@ public class Server : MonoBehaviour {
 			Stopwatch newStopwatch = new Stopwatch();
 
 			newStopwatch.Start();
+			nodesPerimeter.Clear();
 			if (nodeB.connections.Count > 0) {
-				FindPerimeter(nodeA, nodeB);
+				FindPerimeter(nodeA, nodeB, null);
 			}
 			newStopwatch.Stop();
 			UnityEngine.Debug.Log("ElapsedTime - FindPerimeter: " + newStopwatch.ElapsedMilliseconds+ " milliseconds");
@@ -348,7 +361,109 @@ public class Server : MonoBehaviour {
 	}
 
 	public void DestroyWall (Wall wall) {
+		Vector2 rayOriginA = wall.transform.position + -wall.transform.right * 0.01f;
+		Vector2 rayDirectionA = wall.transform.right * 0.01f;
+		RaycastHit2D hitA = Physics2D.Raycast(rayOriginA, rayDirectionA, 0.02f, captureRegionMask);
 
+		Vector2 rayOriginB = wall.transform.position + wall.transform.right * 0.01f;
+		Vector2 rayDirectionB = -wall.transform.right * 0.01f;
+		RaycastHit2D hitB = Physics2D.Raycast(rayOriginB, rayDirectionB, 0.02f, captureRegionMask);
+
+		if (hitA.transform || hitB.transform) {
+
+			UnityEngine.Debug.Log("GO");
+
+			Node nodeA = entities[wall.parentNodesEntityIds[0]] as Node;
+			Node nodeB = entities[wall.parentNodesEntityIds[1]] as Node;
+
+			CaptureRegion captureRegion = null;
+
+			if (hitA.transform) {
+				captureRegion = hitA.transform.GetComponent<CaptureRegion>();
+			} else {
+				captureRegion = hitB.transform.GetComponent<CaptureRegion>();
+			}
+
+			if (nodeA.isInterior == false && nodeB.isInterior == false) {
+				if (captureRegion != null) {
+					CollapseCaptureRegion(captureRegion, wall);
+				}
+			}
+		}
+	}
+
+	private void CollapseCaptureRegion(CaptureRegion captureRegion, Wall wallBroken) {
+		UnityEngine.Debug.Log("Collapse Region");
+		if (players.Count >= captureRegion.playerId) {
+			players[captureRegion.playerId].captureRegions.Remove(captureRegion);
+		}
+
+		foreach (Node node in captureRegion.interiorNodes.Concat(captureRegion.perimeterNodes)) {
+			node.captureRegions.Remove(captureRegion);
+			node.isInterior = false;
+		}
+
+		Node nodeA = entities[wallBroken.parentNodesEntityIds[0]] as Node;
+		Node nodeB = entities[wallBroken.parentNodesEntityIds[1]] as Node;
+
+		nodesAvailable.Clear();
+		nodesAvailable = new List<Node>(captureRegion.interiorNodes.Concat(captureRegion.perimeterNodes).ToList());
+		nodesInitial = new List<Node>(nodesAvailable);
+
+		// Blacklist haning nodes
+		nodesBlacklisted = new List<Node>();
+
+		foreach (Node node in nodesAvailable) {
+			if (node.connections.Count == 0) {
+				nodesBlacklisted.Add(node);
+			} else {
+				if (node.connections.Where(c => (nodesBlacklisted.Contains(c.node) == false && nodesInitial.Contains(c.node) == true)).ToList().Count <= 1) {      // if all connections not blacklisted is <= 1
+					nodesBlacklisted.Add(node);
+					BlackListHangingNodes(node);
+				}
+			}
+		}
+
+		// Subtract nodesBlacklisted from nodesAvailable
+		nodesAvailable = nodesAvailable.Except(nodesBlacklisted).ToList();
+
+		foreach (Node node in nodesAvailable) {
+			UnityEngine.Debug.DrawRay(node.transform.position + new Vector3(-0.1f, 0), Vector2.right * 0.2f, Color.green, 5f);
+		}
+
+		foreach (Node node in nodesBlacklisted) {
+			UnityEngine.Debug.DrawRay(node.transform.position + new Vector3(0, -0.1f), Vector2.up * 0.2f, Color.red, 5f);
+		}
+
+		Send_DestroyCaptureRegion(captureRegion);
+
+		Destroy(captureRegion.transform.gameObject);
+
+		// Go through each available node left over to see if new connections can be made
+		nodesAvailable = nodesAvailable.OrderBy(n => (n.transform.position.x + n.transform.position.y)).ToList();       // Order the availableNodes from bottom left most nodes to rop right most nodes
+		while (nodesAvailable.Count > 0) {
+			foreach (Node.Connection connectionNext in nodesAvailable[0].connections) {
+				Node nodeNext = connectionNext.node;
+				List<Node> bestPerimeter = FindBestPerimeter(nodesAvailable[0]);
+				if (bestPerimeter.Count > 0) {
+					CreateCaptureRegion(bestPerimeter, nodesAvailable[0].capturedPlayerId);
+					nodesAvailable = nodesAvailable.Except(bestPerimeter).ToList();
+					break;
+				}
+			}
+		}
+
+		
+	}
+
+	private void BlackListHangingNodes (Node nodeA) {
+		foreach (Node.Connection connectionNext in nodeA.connections.Where(c => nodesBlacklisted.Contains(c.node) == false && nodesInitial.Contains(c.node) == true)) {
+			Node nodeNext = connectionNext.node;
+			if (nodeNext.connections.Where(c => (nodesBlacklisted.Contains(c.node) == false && nodesInitial.Contains(c.node) == true)).ToList().Count <= 1) {      // if all connections not blacklisted is <= 1
+				nodesBlacklisted.Add(nodeNext);
+				BlackListHangingNodes(nodeNext);
+			}
+		}
 	}
 
 	private bool CheckIfCircuitCompletes (Node nodeA, Node nodeB, List<Node> nodesChecked) {
@@ -378,77 +493,141 @@ public class Server : MonoBehaviour {
 		return false;
 	}
 	
-	private void FindPerimeter (Node nodeA, Node nodeB) {
+	private bool FindPerimeter (Node nodeA, Node nodeB, Wall offLimitWall) {
 		nodesPerimeter = new List<Node>();
-		nodesBlacklisted = new List<Node>();
-		nodesPossible = new List<Node>();
-		largestArea = 0;
-		
-		FindPerimeter_A(nodeA, nodeB, new List<Node>());
+
+		Vector2 directionBA = (nodeA.transform.position - nodeB.transform.position).normalized;
+
+		perimeterNodesLeftmost.Clear();
+		perimeterNodesRightmost.Clear();
+
+		FindPerimeterNodesAngled(nodeA, nodeB, directionBA, new List<Node>(), offLimitWall, true, false);
+		FindPerimeterNodesAngled(nodeA, nodeB, directionBA, new List<Node>(), offLimitWall, false, false);
+
+		// Pick the perimeter with the larger area
+		if (perimeterNodesLeftmost.Count > 0 || perimeterNodesRightmost.Count > 0) {
+			if (perimeterNodesLeftmost.Count > 0 && perimeterNodesRightmost.Count == 0) {
+				nodesPerimeter = perimeterNodesLeftmost;
+				UnityEngine.Debug.Log("LEFT");
+				return true;
+			} else if (perimeterNodesLeftmost.Count == 0 && perimeterNodesRightmost.Count < 0) {
+				nodesPerimeter = perimeterNodesRightmost;
+				UnityEngine.Debug.Log("RIGHT");
+				return true;
+			}
+		}
+
+		if (perimeterNodesLeftmost.Count > 0 && perimeterNodesRightmost.Count > 0) {
+			if (perimeterNodesLeftmost[perimeterNodesLeftmost.Count - 1] == nodeB && perimeterNodesRightmost[perimeterNodesRightmost.Count - 1] != nodeB) {      // If leftmost succeeded but rightmost didn't, pick leftmost
+				nodesPerimeter = perimeterNodesLeftmost;
+				UnityEngine.Debug.Log("LEFT");
+				return true;
+			} else if (perimeterNodesLeftmost[perimeterNodesLeftmost.Count - 1] != nodeB && perimeterNodesRightmost[perimeterNodesRightmost.Count - 1] == nodeB) {      // If rightmost succeeded but leftmost didn't, pick rightmost
+				nodesPerimeter = perimeterNodesRightmost;
+				UnityEngine.Debug.Log("RIGHT");
+				return true;
+			} else {    // If both succeeded
+				if (GetArea(perimeterNodesLeftmost) > GetArea(perimeterNodesRightmost)) {
+					nodesPerimeter = perimeterNodesLeftmost;
+					UnityEngine.Debug.Log("LEFT");
+					return true;
+				} else {
+					nodesPerimeter = perimeterNodesRightmost;
+					UnityEngine.Debug.Log("RIGHT");
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
-	private void FindPerimeter_A (Node nodeA, Node nodeB, List<Node> newNodesPerimeter) {
-		newNodesPerimeter.Add(nodeA);
+	private List<Node> FindBestPerimeter(Node nodeA) {
 
-		List<Node> sortedNodes = new List<Node>();		// List of connectedNodes which are later sorted from greatest to least distance from nodeB
+		float largestArea = 0;
+		List<Node> largestPerimeter = new List<Node>();
 
-		foreach (Node.Connection connectionCurrent in nodeA.connections) {
-			Node nodeNext = connectionCurrent.node;
-			if (nodeNext == nodeB) {        // Success!
-				List<Node> finalNodesPerimeter = new List<Node> (newNodesPerimeter);
-				finalNodesPerimeter.Add(nodeB);
+		foreach (Node.Connection connectionNext in nodeA.connections) {
+			Node nodeB = connectionNext.node;
+			nodesPerimeter = new List<Node>();
 
-				string orderHelper = "(";
-				for (int i = 0; i < finalNodesPerimeter.Count; i++) {
-					orderHelper += finalNodesPerimeter[i].entityId + " ";
+			Vector2 directionBA = (nodeA.transform.position - nodeB.transform.position).normalized;
+
+			perimeterNodesLeftmost.Clear();
+			perimeterNodesRightmost.Clear();
+
+			FindPerimeterNodesAngled(nodeA, nodeB, directionBA, new List<Node>(), connectionNext.wall, true, true);
+			FindPerimeterNodesAngled(nodeA, nodeB, directionBA, new List<Node>(), connectionNext.wall, false, true);
+			
+			if (perimeterNodesLeftmost != null && perimeterNodesLeftmost.Count > 0) {
+				float thisArea = GetArea(perimeterNodesLeftmost);
+				if (thisArea > largestArea) {
+					largestArea = thisArea;
+					largestPerimeter = new List<Node>(perimeterNodesLeftmost);
 				}
-				orderHelper += ")";
+			}
 
-				//UnityEngine.Debug.Log("Success " + finalNodesPerimeter.Count + " " + orderHelper);
-				TestPerimeter(finalNodesPerimeter);
-			} else {                        // Fail! Test nodeNext's connections
-				if (nodeNext.isInterior == false && newNodesPerimeter.Contains(nodeNext) == false && nodesBlacklisted.Contains(nodeNext) == false) {        // Don't path over somewhere we've been already (anti-stackoverflow)
-					float nodeNextDistance = Vector2.Distance(nodeNext.transform.position, nodeB.transform.position);
-					nodeNext.tempDistance = nodeNextDistance;
-					sortedNodes.Add(nodeNext);
-					if (nodesPossible.Contains(nodeNext) == false) {
-						nodesPossible.Add(nodeNext);
+			if (perimeterNodesRightmost != null && perimeterNodesRightmost.Count > 0) {
+				float thisArea = GetArea(perimeterNodesRightmost);
+				if (thisArea > largestArea) {
+					largestArea = thisArea;
+					largestPerimeter = new List<Node>(perimeterNodesRightmost);
+				}
+			}
+		}
+		
+		return new List<Node>(largestPerimeter);
+	}
+
+	private bool FindPerimeterNodesAngled (Node nodeA, Node nodeB, Vector2 directionPrevious, List<Node> perimeterNodes, Wall offLimitWall, bool leftMost, bool initialOnly) {
+		UnityEngine.Debug.DrawRay((Vector2)nodeA.transform.position + new Vector2(-0.125f, 0.125f), new Vector2(0.25f, -0.25f), Color.magenta, 2.5f);
+		if (perimeterNodes != null) {
+			perimeterNodes.Add(nodeA);      // Add nodeA to the perimeterNodes
+
+			if (nodeA == nodeB) {
+				if (leftMost == true) {
+					perimeterNodesLeftmost = new List<Node>(perimeterNodes);
+				} else {
+					perimeterNodesRightmost = new List<Node>(perimeterNodes);
+				}
+				return true;
+			}
+
+			List<Node> connectedNodesSortedByAngle = new List<Node>();
+
+			foreach (Node.Connection connectionNext in nodeA.connections) {
+				Node nodeNext = connectionNext.node;
+				if (connectionNext.wall != offLimitWall) {
+					if (perimeterNodes.Contains(nodeNext) == false && (initialOnly == false || nodesInitial.Contains(nodeNext))) {       // Make sure we're not going backwards
+						if ((nodeNext.connections.Count == 1 && nodeNext != nodeB) == false) {      // If nodeNext is a hang node and isn't nodeB, dont do it
+							nodeNext.directionTemp = (nodeNext.transform.position - nodeA.transform.position).normalized;
+
+							float dot = (directionPrevious.x * nodeNext.directionTemp.x) + (directionPrevious.y * nodeNext.directionTemp.y);
+							float det = (directionPrevious.x * nodeNext.directionTemp.y) - (directionPrevious.y * nodeNext.directionTemp.x);
+
+							nodeNext.tempAngle = Mathf.Atan2(det, dot);
+
+							connectedNodesSortedByAngle.Add(nodeNext);
+						}
 					}
 				}
 			}
-		}
 
-		// Sort the nodes
-		sortedNodes = sortedNodes.OrderByDescending(o => o.tempDistance).ToList();
-
-		// Go through each sorted node
-		for (int i = 0; i < sortedNodes.Count; i++) {      // TODO: foreach cleaner?
-			Node nodeSorted = sortedNodes[i];
-			if (nodesBlacklisted.Contains(nodeSorted) == false) {       // Make sure this node isn't blacklisted
-				FindPerimeter_A(nodeSorted, nodeB, new List<Node>(newNodesPerimeter));
+			if (leftMost == true) {     // If leftmost == true, left most angle is always greater, so order from greatest to smallest
+				connectedNodesSortedByAngle = connectedNodesSortedByAngle.OrderByDescending(n => n.tempAngle).ToList();
+			} else {
+				connectedNodesSortedByAngle = connectedNodesSortedByAngle.OrderBy(n => n.tempAngle).ToList();
 			}
-		}
-	}
 
-	private void TestPerimeter (List<Node> perimeterNodes) {
-		float newArea = GetArea(perimeterNodes);
-		if (newArea > largestArea) {
-			// Success
-			largestArea = newArea;
-			nodesPerimeter = perimeterNodes;
-
-			// Take all possibleNodes that are inside of this polygon and blacklist them
-			for (int i = 0; i < nodesPossible.Count; i++) {
-				Node nodePossible = nodesPossible[i];
-				if (perimeterNodes.Contains(nodePossible) == false && IsPointInPolygon(perimeterNodes, nodePossible.transform.position)) {
-					nodesBlacklisted.Add(nodePossible);
-					nodesPossible.Remove(nodePossible);
-					UnityEngine.Debug.Log("BLACKLIST THAT BITCH!");
-					i--;
+			foreach (Node nodeNextSorted in connectedNodesSortedByAngle) {
+				bool results = FindPerimeterNodesAngled(nodeNextSorted, nodeB, nodeNextSorted.directionTemp, new List<Node>(perimeterNodes), offLimitWall, leftMost, initialOnly);
+				if (results == true) {
+					return true;
 				}
 			}
 
 		}
+
+		return false;
 	}
 
 	private float GetArea(List<Node> nodes) {
@@ -493,7 +672,16 @@ public class Server : MonoBehaviour {
 
 			if (doesEncapsulate == true) {
 				// Remove captureRegion
-				//UnityEngine.Debug.Log("Destroy Old Capture Region (" + GetArea(perimeterNodes) + ") - (" + GetArea(captureRegionCurrent.perimeterPoints) + ")");
+
+				foreach (Node node in captureRegionCurrent.interiorNodes) {
+					node.captureRegions.Remove(captureRegionCurrent);
+				}
+				
+				foreach (Node node in captureRegionCurrent.perimeterNodes) {
+					node.captureRegions.Remove(captureRegionCurrent);
+				}
+
+				Send_DestroyCaptureRegion(captureRegionCurrent);
 				Destroy(captureRegionCurrent.gameObject);
 				players[playerId].captureRegions.RemoveAt(j);
 				j--;
@@ -529,7 +717,11 @@ public class Server : MonoBehaviour {
 			CaptureRegion newCaptureRegion = GameObject.Instantiate(prefab_CaptureRegion, Vector3.zero, Quaternion.identity).GetComponent<CaptureRegion>();
 			players[playerId].captureRegions.Add(newCaptureRegion);
 			newCaptureRegion.perimeterPoints = vertices2D;
+			newCaptureRegion.playerId = playerId;
+			newCaptureRegion.perimeterNodes = new List<Node>(perimeterNodes);		// Set perimeter nodes
 			newCaptureRegion.regionRenderer.material = players[playerId].captureRegionMaterial;
+
+			Send_CreateCaptureRegion(newCaptureRegion);
 
 			// Use the triangulator to get indices for creating triangles
 			Triangulator tr = new Triangulator(vertices2D.ToArray());
@@ -559,15 +751,23 @@ public class Server : MonoBehaviour {
 			Collider2D[] hitNodes = new Collider2D[9999];							// TODO: holy garbage batman
 			Physics2D.OverlapCollider(newCaptureRegion.polygonCollider, newContactFilter, hitNodes);
 
-			UnityEngine.Debug.Log(hitNodes.Length);
-
 			hitNodes = hitNodes.Where(n => n != null).ToArray();
-
+			hitNodes = hitNodes.Where(n => n != null).ToArray();
+			
 			foreach (Collider2D col in hitNodes) {
 				Node colNode = col.transform.GetComponent<Node>();
 				if (colNode != null && perimeterNodes.Contains(colNode) == false) {
-					UnityEngine.Debug.Log("Yuppers!");
 					colNode.isInterior = true;
+					// TODO: Trigger node capture change?
+					newCaptureRegion.interiorNodes.Add(colNode);
+				}
+			}
+
+			// Add this capture region to it's nodes
+			List<Node> newCaptureRegionNodes = new List<Node>(newCaptureRegion.perimeterNodes.Concat(newCaptureRegion.interiorNodes));
+			foreach (Node node in newCaptureRegionNodes) {
+				if (node.captureRegions.Contains(newCaptureRegion) == false) {
+					node.captureRegions.Add(newCaptureRegion);
 				}
 			}
 		}
@@ -614,7 +814,7 @@ public class Server : MonoBehaviour {
 
 		Send(message, unreliableChannel, players);
 	}
-
+	
 	public void Send_EntityTakeDamage (int entityId, int damage, int playerId) {
 		string message = "EntityTakeDamage|" + entityId + "|" + damage + "|" + playerId;
 		Send(message, reliableChannel, players);
@@ -675,6 +875,47 @@ public class Server : MonoBehaviour {
 		Send(newMessage, reliableFragmentedSequencedChannel, connectionId);
 	}
 
+	public void Send_InitializeCaptureRegions(int connectionId) {
+		string newMessage = "InitializeCaptureRegions|";
+
+
+		List<CaptureRegion> allCaptureRegions = players.SelectMany(p => p.Value.captureRegions).ToList();
+		foreach (CaptureRegion capRegion in allCaptureRegions) {
+			newMessage += capRegion.captureRegionId + "%" + capRegion.playerId + "%";
+
+			foreach (Node node in capRegion.perimeterNodes) {
+				newMessage += node.entityId + "$";
+			}
+
+			newMessage = newMessage.Trim('$');
+
+			newMessage += "|";
+		}
+
+		newMessage = newMessage.Trim('|');
+
+		Send(newMessage, reliableFragmentedSequencedChannel, connectionId);
+	}
+
+	private void Send_CreateCaptureRegion(CaptureRegion newCaptureRegion) {
+		// Send Players the new capture region creation
+		string newMessage = "CreateCaptureRegion|" + captureRegionIdIterationCurrent + "|" + newCaptureRegion.playerId + "|";
+		newCaptureRegion.captureRegionId = captureRegionIdIterationCurrent;
+		captureRegionIdIterationCurrent++;
+
+		foreach (Node node in newCaptureRegion.perimeterNodes) {
+			newMessage += node.entityId + "$";
+		}
+
+		newMessage = newMessage.Trim('$');
+		Send(newMessage, reliableSequencedChannel, players);
+	}
+
+	private void Send_DestroyCaptureRegion(CaptureRegion newCaptureRegion) {
+		string newMessage = "DestroyCaptureRegion|" + newCaptureRegion.captureRegionId;
+		Send(newMessage, reliableSequencedChannel, players);
+	}
+
 	public void Send_PlayerTethered (int connectionId, int nodeEntityId) {
 		string newMessage = "PlayerTethered|" + connectionId + "|" + nodeEntityId;
 		Send(newMessage, reliableChannel, players);
@@ -722,6 +963,7 @@ public class Server : MonoBehaviour {
 				// Tell everybody that a new player has connected
 				Send("PlayerConnected|" + playerName + "|" + connectionId + "|" + currentPlayer.playerController.entityId + "|" + currentPlayer.playerColor, reliableSequencedChannel, players);
 				Send_InitializeEntities(connectionId);      // Send the player the initializeEntities info
+				Send_InitializeCaptureRegions(connectionId);
 			}
 		} else {
 
@@ -747,7 +989,6 @@ public class Server : MonoBehaviour {
 
 				// Create projectile
 				GameObject newProjectile = (GameObject)Instantiate(prefab_Projectile, origin, Quaternion.Euler(0, 0, (Mathf.Atan2(velocity.y, velocity.x) * Mathf.Rad2Deg) + 90));
-				newProjectile.transform.localScale = Vector3.one * (velocity.magnitude / 4);
 				Projectile newProjectileClass = newProjectile.GetComponent<Projectile>();
 				newProjectileClass.playerId = connectionId;
 				newProjectileClass.velocity = velocity;
@@ -772,6 +1013,16 @@ public class Server : MonoBehaviour {
 
 			string newMessage = "PlayerChangeBuildType|" + connectionId + "|" + players[connectionId].playerController.buildType;
 			Send(newMessage, reliableChannel, players);
+		}
+	}
+
+	private void Receive_AttemptBuildNode(int connectionId, string[] splitData) {
+		UnityEngine.Debug.Log("BUILD");
+		if (VerifySplitData(connectionId, splitData, 2)) {
+			int nodeEntityId = 0;
+			if (int.TryParse(splitData[1], out nodeEntityId)) {
+				players[connectionId].playerController.AttemptBuildNode(entities[nodeEntityId] as Node);
+			}
 		}
 	}
 

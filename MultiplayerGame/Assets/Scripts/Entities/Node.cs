@@ -15,8 +15,10 @@ public class Node : Entity {
 
 	public List<Connection> connections;
 	public List<Wall> walls;
+	public List<CaptureRegion> captureRegions = new List<CaptureRegion>();			// The capture regions this node is a part of
 
-	public float tempDistance;
+	public float tempAngle;
+	public Vector2 directionTemp;
 	public bool isInterior;
 
 	[System.Serializable]
@@ -65,7 +67,6 @@ public class Node : Entity {
 	public void TriggerNodeCaptureChange (int newCapturePlayerId) {
 		// Change color
 		if (newCapturePlayerId < 0) { // If we are not captured
-
 			capturedColor = ColorHub.HexToColor(ColorHub.Black);
 			capturedPlayerId = newCapturePlayerId;
 		} else {

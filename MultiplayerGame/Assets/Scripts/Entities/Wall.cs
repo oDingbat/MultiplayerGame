@@ -10,6 +10,8 @@ public class Wall : Entity {
 	public string wallType;     // 0 = wall, 1 = gate
 	public int[] parentNodesEntityIds;
 
+	public bool isInterior = false;
+
 	void Start() {
 		eventDie += OnDie;
 	}
@@ -24,6 +26,7 @@ public class Wall : Entity {
 		if (networkPerspective == NetworkPerspective.Server) {
 			(server.entities[parentNodesEntityIds[0]] as Node).connections.Remove((server.entities[parentNodesEntityIds[0]] as Node).connections.Find(x => x.node == (server.entities[parentNodesEntityIds[1]] as Node)));
 			(server.entities[parentNodesEntityIds[1]] as Node).connections.Remove((server.entities[parentNodesEntityIds[1]] as Node).connections.Find(x => x.node == (server.entities[parentNodesEntityIds[0]] as Node)));
+			server.DestroyWall(this);
 			server.entities.Remove(entityId);
 		} else {
 			(client.entities[parentNodesEntityIds[0]] as Node).connections.Remove((client.entities[parentNodesEntityIds[0]] as Node).connections.Find(x => x.node == (client.entities[parentNodesEntityIds[1]] as Node)));

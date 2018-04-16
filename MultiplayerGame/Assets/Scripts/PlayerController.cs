@@ -143,6 +143,20 @@ public class PlayerController : Entity {
 			Screen.fullScreen = !Screen.fullScreen;
 		}
 
+		if (tetheredNode == true) {
+			Collider2D[] hitNodes = Physics2D.OverlapCircleAll(transform.position, 0.15f, nodeMask);
+			
+			if (hitNodes.Length > 0) {
+				foreach (Collider2D node in hitNodes) {
+					Node nodeObject = node.transform.GetComponent<Node>();
+					Debug.Log(nodeObject + " - " + nodeObject.capturedPlayerId + " - " + connectionId);
+					if (nodeObject != null && nodeObject != tetheredNode && nodeObject.capturedPlayerId == connectionId) {
+						client.Send_AttemptBuildNode(nodeObject.entityId);
+					}
+				}
+			}
+		}
+
 		Vector2 directionLerp = Vector2.Lerp(inputMovement, -aimVector, Mathf.Clamp01(aimTime * 25));
 		playerSprite.rotation = Quaternion.Lerp(playerSprite.rotation, Quaternion.Euler(0, 0, Mathf.Atan2(directionLerp.y, directionLerp.x) * Mathf.Rad2Deg) * Quaternion.Euler(0, 0, 135), 20 * Time.deltaTime);
 	}
@@ -177,6 +191,17 @@ public class PlayerController : Entity {
 				SetTether(-1);
 			} else {
 				SetTether(closestNodeId);
+			}
+		}
+	}
+
+	public void AttemptBuildNode (Node node) {
+		if (tetheredNode != null && node != tetheredNode) {
+			if (node.capturedPlayerId == connectionId && Vector2.Distance(node.transform.position, transform.position) < 0.5f) {
+				if (Vector2.Distance(node.transform.position, tetheredNode.transform.position) < 5f) {
+					server.BuildWall(tetheredNode, node, buildType);
+					SetTether(-1);
+				}
 			}
 		}
 	}
@@ -221,6 +246,10 @@ public class PlayerController : Entity {
 
 	void UpdateMovement_Peer () {
 		// Code for manipulating the player client side when this player is one of the client's peers
+		if (Vector2.Distance(transform.position, desiredPosition) > 1.25f) {
+			transform.position = desiredPosition;
+		}
+
 		Vector2 desiredMovement = (desiredPosition - transform.position);
 		rigidbody.velocity = Vector2.ClampMagnitude(Vector2.Lerp(rigidbody.velocity, desiredMovement * 10, 50 * Time.deltaTime), (desiredMovement / Time.deltaTime).magnitude);
 		playerSprite.transform.rotation = Quaternion.Lerp(playerSprite.transform.rotation, Quaternion.Euler(0, 0, desiredRotation), 75 * Time.deltaTime);
@@ -254,20 +283,6 @@ public class PlayerController : Entity {
 					return;
 				}
 			}
-
-
-			Collider2D[] hitNodes = Physics2D.OverlapCircleAll(transform.position, 0.15f, nodeMask);
-			if (hitNodes.Length > 0) {
-				foreach (Collider2D node in hitNodes) {
-					Node nodeObject = node.GetComponent<Node>();
-					if (nodeObject != null && nodeObject != tetheredNode && nodeObject.connections.Any(x => x.node == tetheredNode) == false && nodeObject.capturedPlayerId == connectionId) {
-						server.BuildWall(tetheredNode, nodeObject, buildType);
-						SetTether(-1);
-					}
-				}
-			}
-
-			// Overlap Circle Building
 		}
 	}
 	
@@ -316,7 +331,7 @@ public class PlayerController : Entity {
 			server.DestroyPlayerItems(connectionId);
 		}
 	}
-	
+
 	void OnRespawn () {
 		playerSprite.gameObject.SetActive(true);
 	}

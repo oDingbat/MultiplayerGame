@@ -10,6 +10,8 @@ public class CaptureRegion : MonoBehaviour {
 	public PolygonCollider2D polygonCollider;
 	public MeshFilter meshFilter;
 	public Renderer regionRenderer;
+	public int playerId;
+	public int captureRegionId;
 
 	public void InitializePolygonCollider () {
 		polygonCollider.points = perimeterPoints.ToArray();
